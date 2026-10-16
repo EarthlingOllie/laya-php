@@ -1,0 +1,27 @@
+{
+  "scenario": "health",
+  "description": "GET /health with the key: loaded checkpoints and their revisions.",
+  "request": {
+    "method": "GET",
+    "path": "/health",
+    "headers": {
+      "Authorization": "Bearer <valid-key>"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "status": "ok",
+      "loaded": [],
+      "revisions": {},
+      "device": "cpu",
+      "device_is_preference": true,
+      "checkpoint_devices": {},
+      "cpu_fallbacks": {}
+    }
+  }
+}

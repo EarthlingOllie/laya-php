@@ -67,20 +67,40 @@ function normaliseJunit(string $path, string $root): void
     }
 
     foreach ($document->getElementsByTagName('testcase') as $testCase) {
-        $class = $testCase->getAttribute('class');
+        prefixClassName($testCase, 'class');
+        absoluteFile($testCase, $root);
+    }
 
-        if ($class !== '' && ! str_starts_with($class, 'P\\')) {
-            $testCase->setAttribute('class', 'P\\'.$class);
-        }
-
-        $file = explode('::', $testCase->getAttribute('file'), 2)[0];
-
-        if ($file !== '' && ! str_starts_with($file, '/')) {
-            $testCase->setAttribute('file', $root.'/'.$file);
+    // The suite of one test file carries a `file` attribute and is named after its class;
+    // PHPUnit names it by the class too, and Infection looks tests up by that name first.
+    foreach ($document->getElementsByTagName('testsuite') as $testSuite) {
+        if ($testSuite->hasAttribute('file')) {
+            prefixClassName($testSuite, 'name');
+            absoluteFile($testSuite, $root);
         }
     }
 
     $document->save($path);
+}
+
+/** Pest's generated test classes live under `P\`; its JUnit report leaves that out. */
+function prefixClassName(DOMElement $element, string $attribute): void
+{
+    $class = $element->getAttribute($attribute);
+
+    if ($class !== '' && ! str_starts_with($class, 'P\\')) {
+        $element->setAttribute($attribute, 'P\\'.$class);
+    }
+}
+
+/** The absolute test file path, without Pest's `::test name` suffix. */
+function absoluteFile(DOMElement $element, string $root): void
+{
+    $file = explode('::', $element->getAttribute('file'), 2)[0];
+
+    if ($file !== '' && ! str_starts_with($file, '/')) {
+        $element->setAttribute('file', $root.'/'.$file);
+    }
 }
 
 // Run only when executed, not when the functions are loaded by the tests.

@@ -1,0 +1,216 @@
+{
+  "scenario": "batch",
+  "description": "Three states sharing one question set on the batch endpoint.",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone/batch",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer <valid-key>"
+    },
+    "body": {
+      "states": [
+        "Hi, we were billed twice for March. Please refund the duplicate charge today or we will cancel our plan.",
+        "The app crashes every time I open the settings page.",
+        {
+          "subject": "Thanks",
+          "body": "Just wanted to say the new dashboard looks great."
+        }
+      ],
+      "questions": {
+        "department": {
+          "type": "choice",
+          "instructions": "Which department should handle this?",
+          "criteria": {
+            "billing": "invoices, payments, refunds",
+            "technical": "bugs, outages, system errors",
+            "other": "everything else"
+          }
+        },
+        "churn": {
+          "type": "noul",
+          "instructions": "Does the customer threaten to cancel or leave?"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "results": [
+        {
+          "model": "laya-rl-agent",
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "billing",
+              "probabilities": {
+                "billing": 0.3333,
+                "technical": 0.3333,
+                "other": 0.3333
+              },
+              "confidence": 0.0,
+              "answer_confidence": 0.3333,
+              "action": {
+                "act_probability": 0.5144
+              },
+              "x_jev_confidence": 0.0
+            },
+            "churn": {
+              "type": "noul",
+              "noul": 0.5,
+              "confidence": 0.5,
+              "answer_confidence": 0.5,
+              "action": {
+                "act_probability": 0.5147
+              }
+            }
+          },
+          "usage": {
+            "input_tokens": 117,
+            "output_tokens": 0,
+            "state_tokens": 22,
+            "state_tokens_dropped": 0,
+            "truncated": false,
+            "truncated_questions": []
+          },
+          "routing": {
+            "model": "english",
+            "repo": "/home/laya/.cache/huggingface/shape-proxy-english",
+            "reason": "English Latin text",
+            "detection": {
+              "script": "latin",
+              "script_profile": {
+                "latin": 1.0
+              },
+              "language": "en",
+              "is_english": true,
+              "language_undecided": false,
+              "diacritic_rate": 0.0,
+              "non_latin_fraction": 0.0,
+              "mixed_segment": null
+            },
+            "workflow": null
+          }
+        },
+        {
+          "model": "laya-rl-agent",
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "billing",
+              "probabilities": {
+                "billing": 0.3333,
+                "technical": 0.3333,
+                "other": 0.3333
+              },
+              "confidence": 0.0,
+              "answer_confidence": 0.3333,
+              "action": {
+                "act_probability": 0.514
+              },
+              "x_jev_confidence": 0.0
+            },
+            "churn": {
+              "type": "noul",
+              "noul": 0.5,
+              "confidence": 0.5,
+              "answer_confidence": 0.5,
+              "action": {
+                "act_probability": 0.5144
+              }
+            }
+          },
+          "usage": {
+            "input_tokens": 95,
+            "output_tokens": 0,
+            "state_tokens": 11,
+            "state_tokens_dropped": 0,
+            "truncated": false,
+            "truncated_questions": []
+          },
+          "routing": {
+            "model": "english",
+            "repo": "/home/laya/.cache/huggingface/shape-proxy-english",
+            "reason": "English Latin text",
+            "detection": {
+              "script": "latin",
+              "script_profile": {
+                "latin": 1.0
+              },
+              "language": "en",
+              "is_english": true,
+              "language_undecided": false,
+              "diacritic_rate": 0.0,
+              "non_latin_fraction": 0.0,
+              "mixed_segment": null
+            },
+            "workflow": null
+          }
+        },
+        {
+          "model": "laya-rl-agent",
+          "answers": {
+            "department": {
+              "type": "choice",
+              "choice": "billing",
+              "probabilities": {
+                "billing": 0.3333,
+                "technical": 0.3333,
+                "other": 0.3333
+              },
+              "confidence": 0.0,
+              "answer_confidence": 0.3333,
+              "action": {
+                "act_probability": 0.5139
+              },
+              "x_jev_confidence": 0.0
+            },
+            "churn": {
+              "type": "noul",
+              "noul": 0.5,
+              "confidence": 0.5,
+              "answer_confidence": 0.5,
+              "action": {
+                "act_probability": 0.5142
+              }
+            }
+          },
+          "usage": {
+            "input_tokens": 115,
+            "output_tokens": 0,
+            "state_tokens": 21,
+            "state_tokens_dropped": 0,
+            "truncated": false,
+            "truncated_questions": []
+          },
+          "routing": {
+            "model": "english",
+            "repo": "/home/laya/.cache/huggingface/shape-proxy-english",
+            "reason": "English Latin text",
+            "detection": {
+              "script": "latin",
+              "script_profile": {
+                "latin": 1.0
+              },
+              "language": "en",
+              "is_english": true,
+              "language_undecided": false,
+              "diacritic_rate": 0.0,
+              "non_latin_fraction": 0.0,
+              "mixed_segment": null
+            },
+            "workflow": null
+          }
+        }
+      ],
+      "total_usage": {
+        "input_tokens": 327,
+        "output_tokens": 0
+      }
+    }
+  }
+}

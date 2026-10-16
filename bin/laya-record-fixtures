@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Record request/response fixtures from a running laya-serve into tests/Fixtures/laya/.
+
+The fixtures are the source of truth for the codec's contract tests. Re-record them whenever the
+pinned Laya version or checkpoint revision changes:
+
+    LAYA_API_KEY=fixture-key composer laya:up
+    LAYA_API_KEY=fixture-key bin/laya-record-fixtures
+
+The server must run with LAYA_API_KEY set, because the 401 fixture needs a server that checks
+keys; the key itself is never written to a fixture. Stdlib only.
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "bin" / "lib"))
+from laya_payloads import CHURN, DEPARTMENT, TICKET, URGENCY  # noqa: E402
+WRONG_KEY = "not-the-server-key"
+# Response headers worth keeping. Date, Server-Timing and X-Inference-Time-Ms change every run.
+KEPT_HEADERS = ("content-type", "retry-after")
+
+
+# (name, description, method, path, body, auth, expected status)
+SCENARIOS = [
+    ("choice", "A single choice question.", "POST", "/v1/systemone",
+     {"state": TICKET, "questions": {"department": DEPARTMENT}}, "valid", 200),
+    ("score", "A single score question with a described level per value.", "POST", "/v1/systemone",
+     {"state": TICKET, "questions": {"urgency": URGENCY}}, "valid", 200),
+    ("noul", "A single noul (yes/no) question.", "POST", "/v1/systemone",
+     {"state": TICKET, "questions": {"churn": CHURN}}, "valid", 200),
+    ("multiple_questions", "Choice, score and noul in one call, with a structured state.",
+     "POST", "/v1/systemone",
+     {"state": {"subject": "Charged twice", "body": TICKET},
+      "questions": {"department": DEPARTMENT, "urgency": URGENCY, "churn": CHURN}}, "valid", 200),
+    ("batch", "Three states sharing one question set on the batch endpoint.", "POST",
+     "/v1/systemone/batch",
+     {"states": [TICKET,
+                 "The app crashes every time I open the settings page.",
+                 {"subject": "Thanks", "body": "Just wanted to say the new dashboard looks great."}],
+      "questions": {"department": DEPARTMENT, "churn": CHURN}}, "valid", 200),
+    ("below_min_confidence", "An ambiguous state with min_confidence 0.99, so answers are marked.",
+     "POST", "/v1/systemone",
+     {"state": "Hello, I have a question.", "min_confidence": 0.99,
+      "questions": {"department": DEPARTMENT, "urgency": URGENCY, "churn": CHURN}}, "valid", 200),
+    ("batch_below_min_confidence", "min_confidence on the batch endpoint.", "POST",
+     "/v1/systemone/batch",
+     {"states": [TICKET, "Hello, I have a question."], "min_confidence": 0.9,
+      "questions": {"department": DEPARTMENT, "churn": CHURN}}, "valid", 200),
+    ("unauthorized_bad_key", "A wrong bearer key.", "POST", "/v1/systemone",
+     {"state": TICKET, "questions": {"churn": CHURN}}, "wrong", 401),
+    ("unauthorized_missing_key", "No Authorization header at all.", "POST", "/v1/systemone",
+     {"state": TICKET, "questions": {"churn": CHURN}}, "none", 401),
+    ("too_many_options", "A choice with 101 options; laya-serve caps choices at 100.", "POST",
+     "/v1/systemone",
+     {"state": TICKET, "questions": {"label": {
+         "type": "choice", "instructions": "Which label fits?",
+         "criteria": {"label_%03d" % i: "option %d" % i for i in range(101)}}}}, "valid", 413),
+    ("invalid_request", "A score level without a description.", "POST", "/v1/systemone",
+     {"state": TICKET, "questions": {"urgency": {
+         "type": "score", "instructions": "How urgent is this?",
+         "criteria": ["can wait", None, "blocking"]}}}, "valid", 422),
+    ("invalid_min_confidence", "min_confidence outside [0, 1].", "POST", "/v1/systemone",
+     {"state": TICKET, "min_confidence": 1.5, "questions": {"churn": CHURN}}, "valid", 422),
+    ("unknown_model", "A model that is not a published checkpoint.", "POST", "/v1/systemone",
+     {"state": TICKET, "model": "someone/else", "questions": {"churn": CHURN}}, "valid", 422),
+    ("missing_state", "No state in the body.", "POST", "/v1/systemone",
+     {"questions": {"churn": CHURN}}, "valid", 400),
+    ("health", "GET /health with the key: loaded checkpoints and their revisions.", "GET",
+     "/health", None, "valid", 200),
+]
+
+
+def call(url, method, path, body, auth_header):
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(url + path, data=data, method=method)
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    if auth_header:
+        request.add_header("Authorization", auth_header)
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            return response.status, response.headers, response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.headers, error.read()
+    except (urllib.error.URLError, OSError) as error:
+        raise Unreachable(getattr(error, "reason", error)) from None
+
+
+def laya_version_from_container():
+    cmd = ["docker", "compose", "-f", str(ROOT / "docker" / "compose.yaml"), "exec", "-T", "laya",
+           "python", "-c", "import importlib.metadata as m; print(m.version('laya'))"]
+    try:
+        return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def pinned_revisions_from_container():
+    """What LAYA_REVISION resolves to for the configured checkpoints, when none is loaded yet."""
+    script = ("import json, os; from laya.revisions import resolve_revision; "
+              "from laya.router import DEFAULT_MODELS, _split, normalise_name; "
+              "names = [normalise_name(n) for n in os.environ.get('LAYA_MODELS', 'english').split(',') if n.strip()]; "
+              "print(json.dumps({n: resolve_revision(_split(DEFAULT_MODELS[n])[0]) for n in names}))")
+    cmd = ["docker", "compose", "-f", str(ROOT / "docker" / "compose.yaml"), "exec", "-T", "laya",
+           "python", "-c", script]
+    try:
+        return json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True).stdout)
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        return {}
+
+
+def needs_model(path, expected):
+    """A scenario that reaches inference, and so needs the checkpoint weights."""
+    return expected == 200 and path.startswith("/v1/")
+
+
+def marked_answers(body):
+    results = body.get("results", [body]) if isinstance(body, dict) else []
+    return [a for r in results for a in (r.get("answers") or {}).values()
+            if a.get("low_confidence") or a.get("abstention") == "abstained"]
+
+
+class Unreachable(Exception):
+    pass
+
+
+def is_local(url):
+    return urllib.parse.urlsplit(url).hostname in ("127.0.0.1", "localhost", "::1")
+
+
+def write_json(path, payload):
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+
+
+def record(url, key, skip_inference, staging):
+    """Record every scenario into `staging`. Returns (manifest parts, failures)."""
+    auth = {"valid": ("Bearer " + key, "Bearer <valid-key>"),
+            "wrong": ("Bearer " + WRONG_KEY, "Bearer <wrong-key>"),
+            "none": (None, None)}
+    scenarios, pending, failures = [], {}, []
+    for name, description, method, path, body, auth_kind, expected in SCENARIOS:
+        if skip_inference and needs_model(path, expected):
+            pending[name] = "not recorded: --skip-inference (needs the checkpoint weights loaded)"
+            print("%-28s pending" % name)
+            continue
+        sent_header, recorded_header = auth[auth_kind]
+        status, headers, raw = call(url, method, path, body, sent_header)
+        try:
+            response_body = json.loads(raw)
+        except ValueError:
+            response_body = raw.decode("utf-8", "replace")
+        request_headers = {}
+        if body is not None:
+            request_headers["Content-Type"] = "application/json"
+        if recorded_header:
+            request_headers["Authorization"] = recorded_header
+        file = name + ".json"
+        write_json(staging / file, {
+            "scenario": name,
+            "description": description,
+            "request": {"method": method, "path": path, "headers": request_headers, "body": body},
+            "response": {"status": status,
+                         "headers": {h: headers[h] for h in KEPT_HEADERS if headers.get(h)},
+                         "body": response_body},
+        })
+        entry = {"name": name, "file": file, "status": status, "description": description}
+        if headers.get("x-inference-time-ms"):
+            entry["inference_ms"] = float(headers["x-inference-time-ms"])
+        scenarios.append(entry)
+        if status != expected:
+            failures.append("%s: expected HTTP %d, got %d: %s" % (name, expected, status, response_body))
+        elif "below_min_confidence" in name and not marked_answers(response_body):
+            failures.append("%s: no answer was marked low confidence; pick a more ambiguous state" % name)
+        print("%-28s %d" % (name, status))
+
+    status, _, raw = call(url, "GET", "/openapi.json", None, None)
+    try:
+        spec = json.loads(raw)
+    except ValueError:
+        spec = None
+    if status != 200 or not isinstance(spec, dict) or "openapi" not in spec:
+        failures.append("GET /openapi.json: expected an OpenAPI document, got HTTP %d" % status)
+    else:
+        write_json(staging / "laya-serve-openapi.json", spec)
+    return scenarios, pending, failures
+
+
+def publish(staging, out):
+    """Replace the generated files in `out` with the ones in `staging`, leaving no stale fixture."""
+    out.mkdir(parents=True, exist_ok=True)
+    for old in out.glob("*.json"):
+        old.unlink()
+    for new in staging.glob("*.json"):
+        os.replace(new, out / new.name)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--url", default=os.environ.get("SYSTEM_ONE_URL", "http://127.0.0.1:8000"))
+    parser.add_argument("--out", default=str(ROOT / "tests" / "Fixtures" / "laya"))
+    parser.add_argument("--laya-version",
+                        help="the server's laya version; read from the local container when --url is local")
+    parser.add_argument("--skip-inference", action="store_true",
+                        help="record only the scenarios answered before inference (auth, validation, "
+                             "limits, health), e.g. against LAYA_PRELOAD=0 without weights; the rest "
+                             "are listed as pending in the manifest")
+    args = parser.parse_args(argv)
+    url = args.url.rstrip("/")
+    local = is_local(url)
+
+    key = os.environ.get("LAYA_API_KEY")
+    if not key:
+        print("LAYA_API_KEY must be set, and the server started with the same key, so the 401 "
+              "fixture can be recorded.", file=sys.stderr)
+        return 2
+    version = args.laya_version or (laya_version_from_container() if local else None)
+    if not version:
+        where = "the local container" if local else "a server that is not local"
+        print("Could not read the laya version from %s; pass --laya-version." % where, file=sys.stderr)
+        return 2
+
+    try:
+        _, _, raw = call(url, "GET", "/health", None, "Bearer " + key)
+        health = json.loads(raw)
+        # A checkpoint loaded from a local path reports null: that names no Hub commit.
+        revisions = {n: sha for n, sha in (health.get("revisions") or {}).items() if sha}
+        checkpoint_source = "GET /health (loaded checkpoints)"
+        if not revisions and local:
+            revisions = pinned_revisions_from_container()
+            checkpoint_source = "LAYA_REVISION resolved in the container (no checkpoint loaded)"
+        if not revisions:
+            print("Could not tell which checkpoint revision the server uses: nothing is loaded%s."
+                  % (" and the container could not be asked" if local else ""), file=sys.stderr)
+            return 2
+
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=out.parent, prefix=".laya-fixtures-") as tmp:
+            staging = Path(tmp)
+            scenarios, pending, failures = record(url, key, args.skip_inference, staging)
+            if failures:
+                print("\n".join(["Recording did not match expectations; %s was left unchanged:" % out]
+                                + failures), file=sys.stderr)
+                return 1
+            write_json(staging / "manifest.json", {
+                "laya_version": version,
+                "checkpoints": revisions,
+                "checkpoint_source": checkpoint_source,
+                "recorded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "recorded_with": "bin/laya-record-fixtures",
+                "server_openapi": "laya-serve-openapi.json",
+                "scenarios": scenarios,
+                "pending": pending,
+            })
+            publish(staging, out)
+    except Unreachable as error:
+        print("could not reach laya-serve at %s: %s" % (url, error), file=sys.stderr)
+        return 2
+    except ValueError:
+        print("%s/health did not answer JSON; is that a laya-serve?" % url, file=sys.stderr)
+        return 2
+    print("Recorded %d fixtures into %s" % (len(scenarios), out))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

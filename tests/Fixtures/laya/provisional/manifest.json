@@ -1,0 +1,112 @@
+{
+  "weights": "random-init, shape only",
+  "provisional": "Recorded from the real laya-serve 0.4.8 with the built-in `english` name re-pointed (LAYA_EXTRA_MODELS) at a checkpoint built from the published english config with RANDOM weights, because the weights CDN was unreachable. Field names and shapes are the server's own; every probability and confidence is meaningless. Replace with real fixtures: see README.md.",
+  "checkpoints": {
+    "english": null
+  },
+  "checkpoint_source": "local random-init checkpoint (english architecture, /home/laya/.cache/huggingface/shape-proxy-english); GET /health reports revision null. The recorder's fallback named the LAYA_REVISION pin (55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851), which did NOT serve these answers.",
+  "laya_version": "0.4.8",
+  "recorded_at": "2026-10-16T08:42:15Z",
+  "recorded_with": "bin/laya-record-fixtures",
+  "server_openapi": "laya-serve-openapi.json",
+  "scenarios": [
+    {
+      "name": "choice",
+      "file": "choice.json",
+      "status": 200,
+      "description": "A single choice question.",
+      "inference_ms": 390.41
+    },
+    {
+      "name": "score",
+      "file": "score.json",
+      "status": 200,
+      "description": "A single score question with a described level per value.",
+      "inference_ms": 350.01
+    },
+    {
+      "name": "noul",
+      "file": "noul.json",
+      "status": 200,
+      "description": "A single noul (yes/no) question.",
+      "inference_ms": 430.73
+    },
+    {
+      "name": "multiple_questions",
+      "file": "multiple_questions.json",
+      "status": 200,
+      "description": "Choice, score and noul in one call, with a structured state.",
+      "inference_ms": 838.52
+    },
+    {
+      "name": "batch",
+      "file": "batch.json",
+      "status": 200,
+      "description": "Three states sharing one question set on the batch endpoint.",
+      "inference_ms": 1192.67
+    },
+    {
+      "name": "below_min_confidence",
+      "file": "below_min_confidence.json",
+      "status": 200,
+      "description": "An ambiguous state with min_confidence 0.99, so answers are marked.",
+      "inference_ms": 414.59
+    },
+    {
+      "name": "batch_below_min_confidence",
+      "file": "batch_below_min_confidence.json",
+      "status": 200,
+      "description": "min_confidence on the batch endpoint.",
+      "inference_ms": 784.32
+    },
+    {
+      "name": "unauthorized_bad_key",
+      "file": "unauthorized_bad_key.json",
+      "status": 401,
+      "description": "A wrong bearer key."
+    },
+    {
+      "name": "unauthorized_missing_key",
+      "file": "unauthorized_missing_key.json",
+      "status": 401,
+      "description": "No Authorization header at all."
+    },
+    {
+      "name": "too_many_options",
+      "file": "too_many_options.json",
+      "status": 413,
+      "description": "A choice with 101 options; laya-serve caps choices at 100."
+    },
+    {
+      "name": "invalid_request",
+      "file": "invalid_request.json",
+      "status": 422,
+      "description": "A score level without a description."
+    },
+    {
+      "name": "invalid_min_confidence",
+      "file": "invalid_min_confidence.json",
+      "status": 422,
+      "description": "min_confidence outside [0, 1]."
+    },
+    {
+      "name": "unknown_model",
+      "file": "unknown_model.json",
+      "status": 422,
+      "description": "A model that is not a published checkpoint."
+    },
+    {
+      "name": "missing_state",
+      "file": "missing_state.json",
+      "status": 400,
+      "description": "No state in the body."
+    },
+    {
+      "name": "health",
+      "file": "health.json",
+      "status": 200,
+      "description": "GET /health with the key: loaded checkpoints and their revisions."
+    }
+  ],
+  "pending": {}
+}

@@ -1,0 +1,31 @@
+{
+  "scenario": "invalid_min_confidence",
+  "description": "min_confidence outside [0, 1].",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer <valid-key>"
+    },
+    "body": {
+      "state": "Hi, we were billed twice for March. Please refund the duplicate charge today or we will cancel our plan.",
+      "min_confidence": 1.5,
+      "questions": {
+        "churn": {
+          "type": "noul",
+          "instructions": "Does the customer threaten to cancel or leave?"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "min_confidence must be a float in [0.0, 1.0], got 1.5"
+    }
+  }
+}

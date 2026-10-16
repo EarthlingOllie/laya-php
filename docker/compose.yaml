@@ -1,0 +1,59 @@
+# Local Laya server for laravel-system-one-classification.
+#
+#   composer laya:up      # build if needed, start, wait until the checkpoint is loaded
+#   composer laya:down    # stop (the downloaded weights stay in the laya-hf-cache volume)
+#
+# Every setting below can be overridden from the environment or a .env file next to this file,
+# e.g. LAYA_MODELS=english,multilingual to also preload the multilingual checkpoint.
+name: system-one
+
+services:
+  laya:
+    image: earthlingollie/laya-serve:0.4.8-cpu
+    # Always build from docker/laya (the layer cache makes it quick): never pull this name,
+    # never run an image left over from an older Dockerfile or healthcheck.
+    pull_policy: build
+    build:
+      context: ./laya
+    ports:
+      # Loopback only: laya-serve has no auth unless LAYA_API_KEY is set.
+      - "127.0.0.1:${LAYA_HOST_PORT:-8000}:8000"
+    environment:
+      HF_HOME: /home/laya/.cache/huggingface
+      # Pin each checkpoint to the commit laya 0.4.8 reviewed (laya.revisions.PINNED_REVISIONS).
+      LAYA_REVISION: ${LAYA_REVISION:-reviewed}
+      # Checkpoints built at start. english is ~0.85 GB on disk and ~2 GB resident; add
+      # multilingual (LAYA_MODELS=english,multilingual) for non-English text.
+      LAYA_MODELS: ${LAYA_MODELS:-english}
+      LAYA_PRELOAD: ${LAYA_PRELOAD:-1}
+      # Where text with no language evidence goes. laya's own default is multilingual, which
+      # would download and load a second checkpoint on the first such request.
+      LAYA_DEFAULT_MODEL: ${LAYA_DEFAULT_MODEL:-english}
+      # Optional bearer key. Blank means no auth.
+      LAYA_API_KEY: ${LAYA_API_KEY:-}
+      # Optional: cap torch CPU threads (keep <= physical cores).
+      LAYA_THREADS: ${LAYA_THREADS:-}
+      LAYA_MAX_LOADED: ${LAYA_MAX_LOADED:-}
+      # Optional JSON {name: hub id or path} registering checkpoints of your own.
+      LAYA_EXTRA_MODELS: ${LAYA_EXTRA_MODELS:-}
+      LAYA_JEV_STRICT: ${LAYA_JEV_STRICT:-}
+      LAYA_TOURNAMENT_GROUP: ${LAYA_TOURNAMENT_GROUP:-}
+      LAYA_LOG_LEVEL: ${LAYA_LOG_LEVEL:-info}
+    volumes:
+      # A named volume by default. CI sets LAYA_HF_CACHE to a host directory so actions/cache
+      # can keep the weights between runs.
+      - ${LAYA_HF_CACHE:-laya-hf-cache}:/home/laya/.cache/huggingface
+    healthcheck:
+      # Healthy only once every checkpoint in LAYA_MODELS is resident, not merely listening.
+      test: ["CMD", "python", "/opt/laya/healthcheck.py"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      # The first start downloads the weights before anything can load. Keep this at least as
+      # long as LAYA_WAIT_TIMEOUT: `up --wait` gives up as soon as the container turns
+      # unhealthy, which cannot happen before start_period ends. A success ends it early.
+      start_period: 60m
+    restart: unless-stopped
+
+volumes:
+  laya-hf-cache:

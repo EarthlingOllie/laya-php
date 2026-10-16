@@ -1,6 +1,7 @@
 parameters:
     level: max
     paths:
+        - config
         - src
         - tests/Support
         - tests/TestCase.php
@@ -8,6 +9,9 @@ parameters:
         - tools
         - workbench
     tmpDir: build/phpstan
+    # The package's own config directory (larastan otherwise only knows the app's).
+    configDirectories:
+        - config
 
     # Stricter than level max alone. phpstan-strict-rules and larastan are loaded by
     # phpstan/extension-installer. There is deliberately no baseline: fix, don't ignore.

@@ -1,0 +1,31 @@
+{
+  "scenario": "unknown_model",
+  "description": "A model that is not a published checkpoint.",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer <valid-key>"
+    },
+    "body": {
+      "state": "Hi, we were billed twice for March. Please refund the duplicate charge today or we will cancel our plan.",
+      "model": "someone/else",
+      "questions": {
+        "churn": {
+          "type": "noul",
+          "instructions": "Does the customer threaten to cancel or leave?"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "unknown model 'someone/else'; choose one of ['english', 'multilingual', 'typed-decisions'] (or an alias: ['decisions', 'default', 'en', 'laya', 'laya-multilingual', 'laya-typed-decisions', 'ml', 'multi', 'typed', 'typed_decisions']), or omit model to let the router choose"
+    }
+  }
+}

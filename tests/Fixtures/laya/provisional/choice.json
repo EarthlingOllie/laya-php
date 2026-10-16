@@ -1,0 +1,78 @@
+{
+  "scenario": "choice",
+  "description": "A single choice question.",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer <valid-key>"
+    },
+    "body": {
+      "state": "Hi, we were billed twice for March. Please refund the duplicate charge today or we will cancel our plan.",
+      "questions": {
+        "department": {
+          "type": "choice",
+          "instructions": "Which department should handle this?",
+          "criteria": {
+            "billing": "invoices, payments, refunds",
+            "technical": "bugs, outages, system errors",
+            "other": "everything else"
+          }
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "model": "laya-rl-agent",
+      "answers": {
+        "department": {
+          "type": "choice",
+          "choice": "billing",
+          "probabilities": {
+            "billing": 0.3333,
+            "technical": 0.3333,
+            "other": 0.3333
+          },
+          "confidence": 0.0,
+          "answer_confidence": 0.3333,
+          "action": {
+            "act_probability": 0.5144
+          },
+          "x_jev_confidence": 0.0
+        }
+      },
+      "usage": {
+        "input_tokens": 60,
+        "output_tokens": 0,
+        "state_tokens": 22,
+        "state_tokens_dropped": 0,
+        "truncated": false,
+        "truncated_questions": []
+      },
+      "routing": {
+        "model": "english",
+        "repo": "/home/laya/.cache/huggingface/shape-proxy-english",
+        "reason": "English Latin text",
+        "detection": {
+          "script": "latin",
+          "script_profile": {
+            "latin": 1.0
+          },
+          "language": "en",
+          "is_english": true,
+          "language_undecided": false,
+          "diacritic_rate": 0.0,
+          "non_latin_fraction": 0.0,
+          "mixed_segment": null
+        },
+        "workflow": null
+      }
+    }
+  }
+}

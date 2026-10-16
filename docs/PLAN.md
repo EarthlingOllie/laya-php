@@ -99,8 +99,9 @@ These findings shape the design, so they come first.
   The request takes `state` (a string or a JSON object) and `questions`, plus
   these optional fields: `model`, `lang`, `lang_guess`, `min_confidence`,
   `max_len`, `head_max_len` and `task`. Answers below `min_confidence` come
-  back marked as low confidence. The README names the fields `abstention` and
-  `abstention_threshold`; Phase 0 confirms the exact spelling.
+  back marked as low confidence. Phase 0 confirmed the exact fields
+  (`low_confidence`, `abstention`, `abstention_threshold`); see "Phase 0
+  findings" below.
 - **There is a hosted Laya API at `https://api.laya-ai.com/v1/systemone`.** It
   is run by laya-ai.com, a third party, not by Convai, and uses the same
   protocol with a bearer key, at $0.05 per 1,000 calls. That makes three hosts
@@ -109,7 +110,102 @@ These findings shape the design, so they come first.
   - `LAYA_TOURNAMENT_GROUP` raises the choice-option cap from 100 to 255.
   - `LAYA_JEV_STRICT=1` returns only the fields in Jev's response format.
   - The Hugging Face checkpoint (`convaiinnovations/laya`, Apache-2.0) is at
-    revision `7b928d8`.
+    revision `7b928d8`. `LAYA_REVISION=reviewed` in laya 0.4.8 pins it to
+    `55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851` instead (all three checkpoints
+    live in that one repo; `multilingual` and `typed-decisions` are subfolders).
+
+## Phase 0 findings
+
+Recorded against `laya[serve]==0.4.8` in our own image (`docker/laya/Dockerfile`,
+torch 2.14.1+cpu, transformers 5.20.0) on 2026-10-16. Fixtures are in
+`tests/Fixtures/laya/` with a `manifest.json` naming the Laya version and the
+checkpoint revision; re-record them with `bin/laya-record-fixtures`.
+
+**What was and was not recorded.** The environment the fixtures were first
+recorded in could reach huggingface.co but not the Hugging Face CDN the weights
+are served from (`us.aws.cdn.hf.co`, `cas-server.xethub.hf.co`, both refused by
+its egress proxy). So:
+
+- Recorded from the real server: every response laya-serve gives before
+  inference: 401 (wrong key, missing key), 413 (101 choice options), 422
+  (null score level, `min_confidence` 1.5, unknown model), 400 (missing
+  `state`), `GET /health` and the server's own `/openapi.json`.
+- **Pending** (listed under `pending` in the manifest, and guarded by an
+  expected-failure test in `docker/tests/test_recorder.py`): the model-backed
+  scenarios: `choice`, `score`, `noul`, `multiple_questions`, `batch`,
+  `below_min_confidence`, `batch_below_min_confidence`. Record them on any
+  machine that can download the weights:
+  `LAYA_API_KEY=k composer laya:up && LAYA_API_KEY=k bin/laya-record-fixtures`.
+  No made-up answer payloads were committed in their place.
+
+**Answer fields.** Read from the laya 0.4.8 source (`agent.py`,
+`confidence.py`, `serve.py`) and checked against live responses from the same
+server running a checkpoint with the english architecture and random weights
+(the values are meaningless; the field names and shapes are the server's own):
+
+- **`noul` answers do include `answer_confidence`.** A noul answer is
+  `{type, noul, confidence, answer_confidence, action}`. For noul,
+  `confidence` and `answer_confidence` are both `max(p, 1 − p)` (before any
+  calibration map), while `noul` is P(true). Only `LAYA_JEV_STRICT=1` strips
+  noul down to `{type, noul}`, which is Jev's shape.
+- `choice` and `score` answers also carry `answer_confidence` (= max p) next to
+  the entropy-based `confidence`, plus `x_jev_confidence` (Jev's formula for the
+  same probabilities) and an `action` object (`{"act_probability": …}`).
+- **Low-confidence marking, exact names.** Only when the request sends
+  `min_confidence`, *every* answer gets:
+  - `abstention`: `"passed"`, `"abstained"` or `"unevaluated"` (no usable
+    confidence);
+  - `abstention_threshold`: the float the answer was gated at;
+  - `low_confidence: true`, **only** on answers below the threshold (the key
+    is absent otherwise, never `false`).
+
+  The gate compares `answer_confidence`, not `confidence`. Without
+  `min_confidence` none of the three keys appear. `min_confidence` is either a
+  float in [0, 1] or a per-bucket map such as
+  `{"choice:3-5": 0.8, "noul:2": 0.9, "default": 0.7}`; anything else is a 422.
+- Root fields: `model`, `answers`, `usage` (input/output tokens plus truncation
+  details) and `routing` (`{model, reason}`). The batch endpoint returns
+  `{results: [<one single-call payload per state>], total_usage}`.
+- Errors are always `{"detail": "<message>"}`: 400 (body shape, missing
+  `state`), 401 (bad or missing bearer, only when `LAYA_API_KEY` is set), 413
+  (limits), 422 (invalid question, `min_confidence`, budget or model), 500
+  (`"inference failed"`) and 503 (`"server busy"`, with `Retry-After: 1`).
+- laya-serve limits (all 413): 64 questions, 100 choice options (255 with
+  `LAYA_TOURNAMENT_GROUP`), 32 score levels, 512 options across questions,
+  50,000 state characters, 64 batch states, 2 MiB body.
+- laya-serve's own `/openapi.json` has no request or response schemas (the
+  routes read the raw body), so contract tests must take the body schema from
+  Jev's spec and the recorded fixtures, not from it.
+- Without `LAYA_DEFAULT_MODEL=english`, text with no language evidence routes to
+  `multilingual` and makes the server download and load a second checkpoint;
+  our Compose file sets it.
+
+**CPU latency and RAM** (`bin/laya-measure`, 20 runs after 3 warm-ups). The
+machine: a cloud VM, Intel Xeon @ 2.10 GHz, 4 vCPUs, 15.7 GiB RAM, no GPU,
+shared with other workloads (load average ~3.5 during the run). Because the
+real weights could not be downloaded, this ran a checkpoint built from the
+published english config with random weights: 421,293,830 parameters, a
+842,609,220-byte `model.safetensors` against the published 842,609,210 bytes.
+Compute and memory depend only on the architecture, so the figures stand in
+for the real checkpoint, but re-measure with it (and on an Apple Silicon
+machine) when possible.
+
+| request | p50 inference | p95 inference |
+|---|---|---|
+| 1 noul question | 321 ms | 469 ms |
+| 3 questions (choice, score, noul) | 559 ms | 725 ms |
+| batch: 8 states × 2 questions | 2,535 ms | 3,885 ms |
+
+Memory: 2.06 GiB resident once the english checkpoint is loaded, peaking at
+2.75 GiB during load (`VmHWM`); `docker stats` reported 2.4–2.5 GiB for the
+container. The image is 1.7 GB; the english weights add 0.84 GB to the cache
+volume.
+
+**Jev OpenAPI spec: not fetched.** `api.typesafe.ai` was unreachable from the
+recording environment (HTTP 403 from its egress proxy). `bin/fetch-jev-openapi`
+saves it to `tests/Fixtures/jev/openapi.json`; until it has been run, that
+directory holds only a marked placeholder, and the comparison with the
+recorded fixtures is still to do.
 
 ## Architecture
 
@@ -209,20 +305,49 @@ How the typing works:
   `$result->get($department)->value` is a `Department`.
 - **Questions are handles.** You keep the question object and pass it back to
   `get()`. The string key exists only so the wire format and logs stay stable.
+  As built in #3: `Question` is a `final readonly` factory (`Question::yesNo()`
+  …), and the generic type every question implements is
+  `Question\QuestionHandle<TAnswer>` (`key`, `instructions`, `answerType()`), so
+  `Result::get(QuestionHandle<TAnswer>): TAnswer`. Handles compare by value: an
+  equal handle built elsewhere reads the same answer, but one that only shares
+  the key is refused (`UnknownQuestion`). Keys follow `Question\QuestionKey`:
+  not blank, and not a whole number such as `'0'` (PHP would make it an
+  integer array key and the questions would go out as a JSON list).
 - **Enums drive the options.** `choice` and `score` take a `BackedEnum`
   class-string. Labels come from backing values, and descriptions come from a
   `#[Describe]` attribute on each case. A `score` enum must describe every case,
   because Laya requires it.
-- **Typed errors.**
-  - `InvalidDecision`: a profile limit was broken, caught before sending.
-  - `HostUnavailable`: transport errors or 503 responses.
-  - `RejectedByModel`: the server returned 4xx.
-  - `MalformedResponse`: the response JSON didn't match what we expected.
+- **Typed errors.** Every exception the package throws implements the
+  `Exceptions\SystemOneException` marker (enforced by the architecture tests,
+  including a scan of every `throw` in `src/`).
+  - `InvalidDecision`: the decision can't be sent (blank text or key, a
+    whole-number or repeated key, no questions, an unknown question type, and
+    later a broken profile limit), always raised before anything is sent.
+  - `UnknownQuestion`: `Result::get()` was given a handle the decision didn't ask.
+  - `InvalidProbability`: a probability or threshold outside [0, 1], or a no
+    threshold above the yes threshold.
+  - `InvalidConfiguration`: `config/system-one.php` doesn't describe a usable
+    connection.
+  - `HostUnavailable`: the server couldn't be reached, or answered with any 5xx.
+    The message is redacted (`Transport\Redactor`: URL credentials, query
+    values and the API key), and the HTTP client's exception isn't chained.
+  - `RejectedByModel`: the server returned 4xx (`status`, `detail`).
+  - `MalformedResponse`: the status or JSON didn't match the protocol (`body`
+    holds the raw response).
+- **One dispatch per question type.** `SystemOneCodec::wire()` maps each
+  question type to both its request and its answer decoder, so a type can't be
+  sent without being readable back.
 
 ### Laravel integration
 
 - `config/system-one.php` has a default connection and named connections, each
-  with its own profile.
+  with its own profile. Built in #3: published with
+  `vendor:publish --tag=system-one-config`; `default` from
+  `SYSTEM_ONE_CONNECTION` (`local`); `local` takes `url` from `SYSTEM_ONE_URL`
+  (`http://localhost:8000`), `api_key` from `SYSTEM_ONE_API_KEY` (empty means
+  none) and `timeout` from `SYSTEM_ONE_TIMEOUT` (seconds; empty means 30).
+  `SystemOneManager` reads the config on every call, so runtime `config()`
+  changes apply.
 - A singleton is bound in the container and exposed through a `SystemOne`
   facade.
 - `SystemOne::fake([...])` returns scripted answers and lets tests assert on the
@@ -242,12 +367,36 @@ How the typing works:
 ```
 docker/
   laya/Dockerfile        # python:3.12-slim, CPU torch wheel, pip install "laya[serve]==0.4.8", non-root user
-  compose.yaml           # service `laya`: port 8000, HF cache volume, healthcheck, LAYA_REVISION=reviewed
-  compose.cuda.yaml      # optional NVIDIA override
+  laya/healthcheck.py    # stdlib probe: healthy only once every LAYA_MODELS checkpoint is loaded
+  compose.yaml           # service `laya`: 127.0.0.1:8000, HF cache volume, healthcheck, LAYA_REVISION=reviewed
+  compose.cuda.yaml      # optional NVIDIA override (separate image built against a CUDA torch index)
+  tests/                 # stdlib unittest suite for all of the above (python3 -m unittest discover -s docker/tests)
+bin/
+  laya-up, laya-down     # behind `composer laya:up` (waits for healthy) and `composer laya:down`
+  laya-record-fixtures   # records tests/Fixtures/laya/*.json + manifest.json from a running server
+  laya-measure           # latency/RAM report as JSON
+  fetch-jev-openapi      # saves Jev's OpenAPI document to tests/Fixtures/jev/openapi.json
 ```
 
-- Default: `LAYA_MODELS=english` and `LAYA_PRELOAD=1`, which keeps RAM use down.
-  The multilingual checkpoint is opt-in.
+- The image is always built locally (`pull_policy: build`, rebuilt from the
+  layer cache on each `laya:up`), and the build fails if the probe's copy of
+  laya's checkpoint names no longer matches the installed laya. The
+  healthcheck's 60 m start period must stay longer than `LAYA_WAIT_TIMEOUT`,
+  because `up --wait` gives up as soon as the container turns unhealthy.
+- Default: `LAYA_MODELS=english`, `LAYA_PRELOAD=1` and
+  `LAYA_DEFAULT_MODEL=english`, which keeps RAM use down. The multilingual
+  checkpoint is opt-in: `LAYA_MODELS=english,multilingual composer laya:up`.
+- Other knobs read from the environment: `LAYA_HOST_PORT` (stays on
+  loopback), `LAYA_API_KEY`, `LAYA_THREADS`, `LAYA_MAX_LOADED`,
+  `LAYA_EXTRA_MODELS`, `LAYA_JEV_STRICT`, `LAYA_TOURNAMENT_GROUP`,
+  `LAYA_HF_CACHE` (a host directory instead of the named volume, used by CI),
+  `LAYA_CUDA=1` (adds the CUDA override), `LAYA_COMPOSE_OVERRIDE` (one more
+  Compose file of your own) and `LAYA_WAIT_TIMEOUT`.
+- Behind a TLS-inspecting corporate proxy, the image builds with
+  `docker build --secret id=extra_ca,src=<ca.pem> …`, and the container needs
+  the proxy's CA (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) and, if the proxy
+  blocks the Xet hosts (`cas-server.xethub.hf.co`), `HF_HUB_DISABLE_XET=1`, set
+  through a `LAYA_COMPOSE_OVERRIDE` file.
 - `system-one:install` asks which to set up:
   - **Standalone** (the default): publishes `compose.system-one.yaml` into the
     app and sets `SYSTEM_ONE_URL=http://localhost:8000` in `.env`.
@@ -256,19 +405,24 @@ docker/
     `laravel.test` container.
 - The repo also has its own dev Compose file, which runs a PHP container next to
   `laya` for integration tests. CI runs the same setup with the HF cache volume
-  cached between runs.
+  cached between runs: `.github/workflows/integration.yml` builds the image
+  (GHA layer cache), restores the weights with `actions/cache` (keyed on the
+  checkpoint SHA), runs `bin/laya-up` and smoke-tests every fixture scenario
+  against the live server. The PHP integration suite plugs in there.
 
 ### Package layout
 
 ```
 src/
-  Domain/        Context, Decision, Question/{Choice,Score,YesNo}Question, Describe attribute
-  Result/        Result, ResultSet, Answer/{Choice,Score,YesNo}Answer, Distribution, Verdict, Meta
+  Domain/        Context, Decision, Question (factory), Question/{QuestionHandle,QuestionKey,
+                 Choice,Score,YesNoQuestion}, Describe attribute
+  Result/        Result, ResultSet, Answer/{Answer,Choice,Score,YesNoAnswer}, Distribution, Verdict, Meta
   Model/         ModelProfile, LayaProfile, JevProfile
   Protocol/      SystemOneCodec (request/response mapping)
-  Transport/     Transport, HttpTransport, FakeTransport
-  Laravel/       SystemOneServiceProvider, Facades/SystemOne, Commands/*, Events/*, Testing/Fake
-  Exceptions/
+  Transport/     Transport, HttpTransport, Response, Redactor, FakeTransport
+  Client/        DecisionClient (one per connection)
+  Laravel/       SystemOneServiceProvider, SystemOneManager, Facades/SystemOne, Commands/*, Events/*, Testing/Fake
+  Exceptions/    SystemOneException marker and the typed errors above
 config/system-one.php
 docker/
 tests/{Unit,Contract,Integration}
@@ -347,5 +501,12 @@ tests/{Unit,Contract,Integration}
 
 ## Open architectural questions
 
-None. Everything raised so far is settled in the decisions table. New
-questions get added here as they come up.
+New questions get added here as they come up.
+
+1. **Which field drives `abstained`?** Phase 0 found that the server reports a
+   three-state `abstention` (`passed`, `abstained`, `unevaluated`) plus
+   `abstention_threshold`, and a `low_confidence: true` that only appears on
+   abstained answers. Decision 10 has a boolean `abstained`. Suggested: derive
+   `abstained` from `abstention === 'abstained'` (falling back to
+   `low_confidence` when `abstention` is missing), and decide whether
+   `unevaluated` needs its own representation or reads as "not abstained".

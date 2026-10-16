@@ -1,0 +1,69 @@
+{
+  "laya_version": "0.4.8",
+  "checkpoints": {
+    "english": "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851"
+  },
+  "checkpoint_source": "LAYA_REVISION resolved in the container (no checkpoint loaded)",
+  "recorded_at": "2026-10-16T08:09:40Z",
+  "recorded_with": "bin/laya-record-fixtures",
+  "server_openapi": "laya-serve-openapi.json",
+  "scenarios": [
+    {
+      "name": "unauthorized_bad_key",
+      "file": "unauthorized_bad_key.json",
+      "status": 401,
+      "description": "A wrong bearer key."
+    },
+    {
+      "name": "unauthorized_missing_key",
+      "file": "unauthorized_missing_key.json",
+      "status": 401,
+      "description": "No Authorization header at all."
+    },
+    {
+      "name": "too_many_options",
+      "file": "too_many_options.json",
+      "status": 413,
+      "description": "A choice with 101 options; laya-serve caps choices at 100."
+    },
+    {
+      "name": "invalid_request",
+      "file": "invalid_request.json",
+      "status": 422,
+      "description": "A score level without a description."
+    },
+    {
+      "name": "invalid_min_confidence",
+      "file": "invalid_min_confidence.json",
+      "status": 422,
+      "description": "min_confidence outside [0, 1]."
+    },
+    {
+      "name": "unknown_model",
+      "file": "unknown_model.json",
+      "status": 422,
+      "description": "A model that is not a published checkpoint."
+    },
+    {
+      "name": "missing_state",
+      "file": "missing_state.json",
+      "status": 400,
+      "description": "No state in the body."
+    },
+    {
+      "name": "health",
+      "file": "health.json",
+      "status": 200,
+      "description": "GET /health with the key: loaded checkpoints and their revisions."
+    }
+  ],
+  "pending": {
+    "choice": "not recorded: --skip-inference (needs the checkpoint weights loaded)",
+    "score": "not recorded: --skip-inference (needs the checkpoint weights loaded)",
+    "noul": "not recorded: --skip-inference (needs the checkpoint weights loaded)",
+    "multiple_questions": "not recorded: --skip-inference (needs the checkpoint weights loaded)",
+    "batch": "not recorded: --skip-inference (needs the checkpoint weights loaded)",
+    "below_min_confidence": "not recorded: --skip-inference (needs the checkpoint weights loaded)",
+    "batch_below_min_confidence": "not recorded: --skip-inference (needs the checkpoint weights loaded)"
+  }
+}

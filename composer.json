@@ -38,6 +38,9 @@
     },
     "extra": {
         "laravel": {
+            "aliases": {
+                "SystemOne": "EarthlingOllie\\SystemOneClassification\\Laravel\\Facades\\SystemOne"
+            },
             "providers": [
                 "EarthlingOllie\\SystemOneClassification\\Laravel\\SystemOneServiceProvider"
             ]
@@ -54,6 +57,14 @@
         ],
         "format": "@php vendor/bin/pint",
         "format:check": "@php vendor/bin/pint --test",
+        "laya:down": [
+            "Composer\\Config::disableProcessTimeout",
+            "bin/laya-down"
+        ],
+        "laya:up": [
+            "Composer\\Config::disableProcessTimeout",
+            "bin/laya-up"
+        ],
         "mutate": "@php tools/mutate.php --threads=max --with-uncovered --show-mutations --no-progress",
         "post-autoload-dump": [
             "@php vendor/bin/testbench package:discover --ansi"
@@ -76,6 +87,8 @@
         "check": "Run every quality gate, as CI does.",
         "format": "Fix code style with Laravel Pint.",
         "format:check": "Check code style with Laravel Pint without changing files.",
+        "laya:down": "Stop the local Laya server; the downloaded weights are kept.",
+        "laya:up": "Start the local Laya server (Docker) and wait until its checkpoint is loaded.",
         "mutate": "Infection mutation testing (MSI >= 90, covered MSI 100).",
         "serve": "Serve the workbench app (testbench.yaml) with the package auto-discovered; set SERVER_PORT/SERVER_HOST to change the address.",
         "test": "Unit, Contract, Feature and Arch suites.",

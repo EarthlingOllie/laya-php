@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""Measure laya-serve CPU latency and memory on this machine, as JSON on stdout.
+
+    composer laya:up
+    bin/laya-measure > latency.json
+
+Reports p50/p95 of the server's own X-Inference-Time-Ms and of the wall time per request for
+three request shapes, plus the container's memory (`docker stats`) and the machine it ran on.
+Stdlib only.
+"""
+import argparse
+import json
+import math
+import os
+import platform
+import statistics
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+from laya_payloads import CHURN, DEPARTMENT, TICKET, URGENCY  # noqa: E402
+
+SCENARIOS = {
+    "noul_1q": ("/v1/systemone", {"state": TICKET, "questions": {"churn": CHURN}}),
+    "mixed_3q": ("/v1/systemone", {"state": TICKET, "questions": {
+        "department": DEPARTMENT, "urgency": URGENCY, "churn": CHURN}}),
+    "batch_8_states_2q": ("/v1/systemone/batch", {"states": [TICKET] * 8, "questions": {
+        "department": DEPARTMENT, "churn": CHURN}}),
+}
+
+
+def post(url, path, body, key):
+    request = urllib.request.Request(url + path, data=json.dumps(body).encode(), method="POST")
+    request.add_header("Content-Type", "application/json")
+    if key:
+        request.add_header("Authorization", "Bearer " + key)
+    start = time.perf_counter()
+    with urllib.request.urlopen(request, timeout=600) as response:
+        response.read()
+        inference = response.headers.get("X-Inference-Time-Ms")
+    return (time.perf_counter() - start) * 1000.0, float(inference) if inference else None
+
+
+def summary(values):
+    values = sorted(v for v in values if v is not None)
+    if not values:
+        return None
+    p95 = values[max(0, math.ceil(0.95 * len(values)) - 1)]  # nearest rank
+    return {"p50": round(statistics.median(values), 2), "p95": round(p95, 2),
+            "mean": round(statistics.fmean(values), 2), "min": round(values[0], 2)}
+
+
+def machine():
+    cpu = platform.processor() or platform.machine()
+    try:
+        with open("/proc/cpuinfo") as f:
+            cpu = next(l.split(":", 1)[1].strip() for l in f if l.startswith("model name"))
+    except (OSError, StopIteration):
+        try:
+            cpu = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True,
+                                 text=True, check=True).stdout.strip() or cpu
+        except (OSError, subprocess.CalledProcessError):
+            pass
+    return {"cpu": cpu, "arch": platform.machine(), "logical_cpus": os.cpu_count(),
+            "os": platform.platform()}
+
+
+def container_stats(name):
+    try:
+        out = subprocess.run(["docker", "stats", "--no-stream", "--format", "{{json .}}", name],
+                             capture_output=True, text=True, check=True, timeout=60).stdout
+        stats = json.loads(out.strip().splitlines()[0])
+        return {"mem_usage": stats.get("MemUsage"), "cpu_percent": stats.get("CPUPerc")}
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return None
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--url", default=os.environ.get("SYSTEM_ONE_URL", "http://127.0.0.1:8000"))
+    parser.add_argument("--runs", type=int, default=20)
+    parser.add_argument("--warmup", type=int, default=3)
+    parser.add_argument("--model", help="pin a checkpoint, e.g. english")
+    parser.add_argument("--container", default="system-one-laya-1")
+    parser.add_argument("--no-docker", action="store_true", help="skip the docker stats reading")
+    args = parser.parse_args(argv)
+    key = os.environ.get("LAYA_API_KEY")
+    url = args.url.rstrip("/")
+
+    report = {"machine": machine(), "runs_per_scenario": args.runs, "model": args.model,
+              "scenarios": {}}
+    if not args.no_docker:
+        report["memory_before"] = container_stats(args.container)
+    for name, (path, body) in SCENARIOS.items():
+        if args.model:
+            body = dict(body, model=args.model)
+        try:
+            for _ in range(args.warmup):
+                post(url, path, body, key)
+            timings = [post(url, path, body, key) for _ in range(args.runs)]
+        except urllib.error.HTTPError as error:
+            print("%s: laya-serve answered HTTP %d: %s" % (name, error.code, error.read()[:200].decode(
+                "utf-8", "replace")), file=sys.stderr)
+            return 1
+        except urllib.error.URLError as error:
+            print("could not reach laya-serve at %s: %s" % (url, error.reason), file=sys.stderr)
+            return 2
+        report["scenarios"][name] = {
+            "runs": len(timings),
+            "wall_ms": summary(t[0] for t in timings),
+            "inference_ms": summary(t[1] for t in timings),
+        }
+        print("%-20s done" % name, file=sys.stderr)
+    if not args.no_docker:
+        report["memory_after"] = container_stats(args.container)
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

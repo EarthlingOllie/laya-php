@@ -5,9 +5,12 @@
         "strict_comparison": true,
         "strict_param": true,
         "global_namespace_import": {
-            "import_classes": true,
             "import_constants": false,
-            "import_functions": false
+            "import_functions": true
+        },
+        "native_function_invocation": {
+            "include": ["@all"],
+            "scope": "namespaced"
         },
         "ordered_class_elements": true
     },

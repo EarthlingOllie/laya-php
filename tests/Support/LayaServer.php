@@ -6,6 +6,18 @@ namespace EarthlingOllie\SystemOneClassification\Tests\Support;
 
 use PHPUnit\Framework\Assert;
 
+use function array_filter;
+use function fclose;
+use function fsockopen;
+use function getenv;
+use function in_array;
+use function is_string;
+use function parse_url;
+use function restore_error_handler;
+use function set_error_handler;
+use function strtolower;
+use function trim;
+
 /**
  * The Laya server the Integration suite talks to (SYSTEM_ONE_URL, default
  * http://localhost:8000).

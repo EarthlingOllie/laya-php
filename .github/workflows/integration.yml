@@ -1,0 +1,91 @@
+name: Laya container
+
+# Builds and starts the local laya-serve container the integration suite runs against.
+# Kept separate from ci.yml so the PHP gates stay fast; the model download is cached.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: laya-container-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-setup:
+    name: Docker setup tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dockerfile, Compose, healthcheck, scripts and recorder tests
+        run: python3 -m unittest discover -s docker/tests -v
+
+  laya-container:
+    name: laya-serve container
+    runs-on: ubuntu-24.04
+    needs: docker-setup
+    timeout-minutes: 60
+    env:
+      # A host directory instead of the named volume, so actions/cache can keep the weights.
+      LAYA_HF_CACHE: /home/runner/.cache/laya-hf
+      # Set so the recorder can exercise the 401 path; any value works for a throwaway server.
+      LAYA_API_KEY: ci-fixture-key
+      LAYA_WAIT_TIMEOUT: "1800"
+      SYSTEM_ONE_URL: http://127.0.0.1:8000
+      # The PHP client's key for the same server (config/system-one.php reads it).
+      SYSTEM_ONE_API_KEY: ci-fixture-key
+      # Fail the PHP integration suite, rather than skip it, if the server is not reachable.
+      SYSTEM_ONE_REQUIRE_SERVER: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the laya-serve image (layer cache in GitHub Actions)
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/laya
+          tags: earthlingollie/laya-serve:0.4.8-cpu
+          load: true
+          cache-from: type=gha,scope=laya-serve
+          cache-to: type=gha,mode=max,scope=laya-serve
+
+      - name: Restore the Hugging Face cache
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/laya-hf
+          # The english checkpoint pinned by LAYA_REVISION=reviewed in laya 0.4.8.
+          key: laya-hf-english-55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851
+
+      - name: Let the container user write the cache
+        # The image runs as uid 1000; the runner is a different uid.
+        run: mkdir -p "$LAYA_HF_CACHE" && chmod -R a+rwX "$LAYA_HF_CACHE"
+
+      - name: Start laya-serve and wait until the checkpoint is loaded
+        run: bin/laya-up
+
+      - name: Smoke-test every recorded scenario against the live server
+        run: bin/laya-record-fixtures --out "$RUNNER_TEMP/laya-fixtures"
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+
+      - uses: ramsey/composer-install@v3
+
+      - name: PHP integration suite against the live server
+        run: composer test:integration
+
+      - name: Server logs
+        if: failure()
+        run: docker compose -f docker/compose.yaml logs --tail 200 laya
+
+      - name: Stop laya-serve
+        if: always()
+        run: bin/laya-down

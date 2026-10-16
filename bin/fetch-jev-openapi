@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Fetch TypeSafe Jev's OpenAPI document into tests/Fixtures/jev/openapi.json for the contract tests.
+#
+#   JEV_OPENAPI_URL  source (default https://api.typesafe.ai/openapi.json)
+#   JEV_OPENAPI_OUT  destination (default tests/Fixtures/jev/openapi.json)
+#
+# The file is replaced only when the download is a JSON object with an "openapi" version, so a
+# proxy error page or an outage never overwrites a good copy.
+set -euo pipefail
+
+here="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+url="${JEV_OPENAPI_URL:-https://api.typesafe.ai/openapi.json}"
+out="${JEV_OPENAPI_OUT:-$here/tests/Fixtures/jev/openapi.json}"
+
+tmp="$(mktemp)"
+trap 'rm -f "$tmp" "$tmp.pretty"' EXIT
+
+if ! curl -fsSL --retry 2 --max-time 60 "$url" -o "$tmp"; then
+    echo "fetch-jev-openapi: could not download $url" >&2
+    exit 1
+fi
+
+if ! python3 -c '
+import json, sys
+doc = json.load(open(sys.argv[1]))
+if not isinstance(doc, dict) or "openapi" not in doc:
+    sys.exit("not an OpenAPI document")
+json.dump(doc, open(sys.argv[2], "w"), indent=2, sort_keys=False)
+open(sys.argv[2], "a").write("\n")
+' "$tmp" "$tmp.pretty"; then
+    echo "fetch-jev-openapi: $url did not return an OpenAPI JSON document" >&2
+    exit 1
+fi
+
+mkdir -p "$(dirname "$out")"
+mv "$tmp.pretty" "$out"
+echo "Saved $url to $out"

@@ -1,0 +1,29 @@
+{
+  "scenario": "unauthorized_missing_key",
+  "description": "No Authorization header at all.",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "state": "Hi, we were billed twice for March. Please refund the duplicate charge today or we will cancel our plan.",
+      "questions": {
+        "churn": {
+          "type": "noul",
+          "instructions": "Does the customer threaten to cancel or leave?"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "invalid or missing bearer token"
+    }
+  }
+}

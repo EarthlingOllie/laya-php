@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stop the local Laya server (`composer laya:down`). The downloaded weights stay in the
+# laya-hf-cache volume; remove them with `docker volume rm system-one_laya-hf-cache`.
+set -euo pipefail
+
+here="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+# shellcheck source=bin/lib/laya-compose.sh
+source "$here/bin/lib/laya-compose.sh"
+
+laya_compose down

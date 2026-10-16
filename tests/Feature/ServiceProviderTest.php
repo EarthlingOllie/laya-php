@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use EarthlingOllie\SystemOneClassification\Laravel\SystemOneManager;
 use EarthlingOllie\SystemOneClassification\Laravel\SystemOneServiceProvider;
 use EarthlingOllie\SystemOneClassification\Tests\Support\ComposerManifest;
 use Illuminate\Filesystem\Filesystem;
@@ -35,14 +36,10 @@ it('boots inside a Laravel application', function (): void {
         ->and($this->app?->getProvider(SystemOneServiceProvider::class))->toBeInstanceOf(SystemOneServiceProvider::class);
 });
 
-it('does not register anything yet', function (): void {
+it('registers the manager as a shared binding', function (): void {
     $app = $this->app;
     assert($app !== null);
 
-    $before = array_keys($app->getBindings());
-
-    $provider = new SystemOneServiceProvider($app);
-    $provider->register();
-
-    expect(array_keys($app->getBindings()))->toBe($before);
+    expect($app->bound(SystemOneManager::class))->toBeTrue()
+        ->and($app->isShared(SystemOneManager::class))->toBeTrue();
 });

@@ -1,0 +1,86 @@
+{
+  "scenario": "score",
+  "description": "A single score question with a described level per value.",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer <valid-key>"
+    },
+    "body": {
+      "state": "Hi, we were billed twice for March. Please refund the duplicate charge today or we will cancel our plan.",
+      "questions": {
+        "urgency": {
+          "type": "score",
+          "instructions": "How urgent is this?",
+          "criteria": [
+            "can wait",
+            "soon",
+            "today",
+            "blocking"
+          ]
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "model": "laya-rl-agent",
+      "answers": {
+        "urgency": {
+          "type": "score",
+          "score": 1.5,
+          "legend": {
+            "0": "can wait",
+            "1": "soon",
+            "2": "today",
+            "3": "blocking"
+          },
+          "probabilities": {
+            "0": 0.25,
+            "1": 0.25,
+            "2": 0.25,
+            "3": 0.25
+          },
+          "confidence": 0.0,
+          "answer_confidence": 0.25,
+          "action": {
+            "act_probability": 0.5144
+          },
+          "x_jev_confidence": 0.0
+        }
+      },
+      "usage": {
+        "input_tokens": 55,
+        "output_tokens": 0,
+        "state_tokens": 22,
+        "state_tokens_dropped": 0,
+        "truncated": false,
+        "truncated_questions": []
+      },
+      "routing": {
+        "model": "english",
+        "repo": "/home/laya/.cache/huggingface/shape-proxy-english",
+        "reason": "English Latin text",
+        "detection": {
+          "script": "latin",
+          "script_profile": {
+            "latin": 1.0
+          },
+          "language": "en",
+          "is_english": true,
+          "language_undecided": false,
+          "diacritic_rate": 0.0,
+          "non_latin_fraction": 0.0,
+          "mixed_segment": null
+        },
+        "workflow": null
+      }
+    }
+  }
+}

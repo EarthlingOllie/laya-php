@@ -31,6 +31,8 @@ const READONLY_CORE = [
     PACKAGE.'\\Model',
     PACKAGE.'\\Protocol',
     PACKAGE.'\\Transport',
+    // The client itself is immutable too (PLAN.md, Quality bar): one instance per connection.
+    PACKAGE.'\\Client',
 ];
 
 /*
@@ -61,6 +63,23 @@ arch(EXCEPTIONS.' classes are final')
     ->expect(EXCEPTIONS)
     ->classes()
     ->toBeFinal();
+
+/*
+ * SystemOneException promises that `catch (SystemOneException)` catches everything the
+ * package throws. These two rules cover the exception classes themselves: each one
+ * implements the marker, and none lives outside the Exceptions namespace.
+ * ThrownExceptionsTest covers the other half, the `throw` statements: Pest's `toUse()`
+ * ignores PHP's own classes, so it cannot see a `throw new \InvalidArgumentException`.
+ */
+arch(EXCEPTIONS.' classes implement SystemOneException')
+    ->expect(EXCEPTIONS)
+    ->classes()
+    ->toImplement(EXCEPTIONS.'\\SystemOneException');
+
+arch('only '.EXCEPTIONS.' holds Throwables')
+    ->expect(PACKAGE)
+    ->not->toImplement(Throwable::class)
+    ->ignoring(EXCEPTIONS);
 
 foreach ([...READONLY_CORE, EXCEPTIONS] as $namespace) {
     arch("{$namespace} contains no traits")
