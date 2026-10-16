@@ -1,0 +1,29 @@
+{
+  "scenario": "missing_state",
+  "description": "No state in the body.",
+  "request": {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer <valid-key>"
+    },
+    "body": {
+      "questions": {
+        "churn": {
+          "type": "noul",
+          "instructions": "Does the customer threaten to cancel or leave?"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "detail": "'state' is required"
+    }
+  }
+}

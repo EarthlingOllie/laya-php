@@ -1,0 +1,22 @@
+# Optional NVIDIA override. Needs the NVIDIA Container Toolkit on the host.
+#
+#   docker compose -f docker/compose.yaml -f docker/compose.cuda.yaml up -d --wait
+#   (or: LAYA_CUDA=1 composer laya:up)
+#
+# Builds a separate image with a CUDA torch wheel; pick the index matching your driver
+# (LAYA_TORCH_INDEX_URL, e.g. https://download.pytorch.org/whl/cu130 for newer drivers).
+services:
+  laya:
+    image: earthlingollie/laya-serve:0.4.8-cuda
+    build:
+      args:
+        TORCH_INDEX_URL: ${LAYA_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu126}
+    environment:
+      LAYA_DEVICE: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${LAYA_GPU_COUNT:-1}
+              capabilities: [gpu]

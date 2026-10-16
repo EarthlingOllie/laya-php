@@ -1,0 +1,18 @@
+{
+    "name": "earthlingollie/laravel-system-one-classification",
+    "license": "MIT",
+    "scripts": {
+        "laya:up": [
+            "Composer\\Config::disableProcessTimeout",
+            "bin/laya-up"
+        ],
+        "laya:down": [
+            "Composer\\Config::disableProcessTimeout",
+            "bin/laya-down"
+        ]
+    },
+    "scripts-descriptions": {
+        "laya:up": "Start the local Laya server (Docker) and wait until its checkpoint is loaded.",
+        "laya:down": "Stop the local Laya server; the downloaded weights are kept."
+    }
+}

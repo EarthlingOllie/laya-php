@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Start the local Laya server and block until its checkpoint is loaded (`composer laya:up`).
+#
+#   LAYA_WAIT_TIMEOUT  seconds to wait for healthy (default 1800; the first run downloads weights)
+#   LAYA_CUDA=1        add docker/compose.cuda.yaml (NVIDIA GPUs)
+#   LAYA_COMPOSE_OVERRIDE=path  add one more compose file of your own
+#   Any LAYA_* setting from docker/compose.yaml, e.g. LAYA_MODELS=english,multilingual
+set -euo pipefail
+
+here="$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)"
+# shellcheck source=bin/lib/laya-compose.sh
+source "$here/bin/lib/laya-compose.sh"
+
+# docker/compose.yaml sets pull_policy: build, so `up` rebuilds from the layer cache each time.
+timeout="${LAYA_WAIT_TIMEOUT:-1800}"
+echo "Starting laya-serve (first run downloads the checkpoint, this can take a while)..."
+if ! laya_compose up -d --wait --wait-timeout "$timeout"; then
+    echo "laya-serve did not become healthy within ${timeout}s. Last log lines:" >&2
+    laya_compose logs --tail 50 laya >&2 || true
+    exit 1
+fi
+echo "laya-serve is ready on http://127.0.0.1:${LAYA_HOST_PORT:-8000}"
