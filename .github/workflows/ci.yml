@@ -1,0 +1,84 @@
+# Quality gates from docs/PLAN.md ("Quality bar"). Every job is meant to be a required
+# status check on main. The Docker-backed Integration suite runs in its own workflow
+# (.github/workflows/integration.yml), not here.
+name: CI
+
+# Pull requests run every gate; pushes to main re-check the merged result. Pushing to a
+# PR branch therefore runs CI once, not twice. workflow_dispatch runs it on any branch.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PHP_VERSION: '8.4'
+
+jobs:
+  format:
+    name: Format (Pint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          coverage: none
+      - uses: ramsey/composer-install@v3
+      - run: composer format:check
+
+  analyse:
+    name: Static analysis (PHPStan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          coverage: none
+      - uses: ramsey/composer-install@v3
+      - run: composer analyse -- --error-format=github
+
+  test:
+    name: Tests (Pest, incl. architecture)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          coverage: none
+      - uses: ramsey/composer-install@v3
+      - run: composer test
+
+  coverage:
+    name: Coverage (100% lines and branches)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          # Branch coverage needs Xdebug; PCOV only measures lines.
+          coverage: xdebug
+      - uses: ramsey/composer-install@v3
+      - run: composer test:coverage
+
+  mutation:
+    name: Mutation (Infection)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          coverage: pcov
+      - uses: ramsey/composer-install@v3
+      - run: composer mutate -- --logger-github

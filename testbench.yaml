@@ -1,0 +1,21 @@
+# Workbench app for `vendor/bin/testbench serve` and Feature tests using WithWorkbench.
+# The package's own service provider is deliberately not listed under `providers`:
+# it must arrive through Laravel package auto-discovery (composer.json extra.laravel).
+laravel: '@testbench'
+
+env:
+  # Throwaway key for the local workbench app only (encrypted cookies on web routes).
+  - APP_KEY="base64:8qYkwXk2TVuV1M/nj61QQOG33ogSpXeXNV0TVSbr/kQ="
+  # `composer serve` must not take 8000, the local Laya server's port.
+  - SERVER_PORT=8010
+
+workbench:
+  start: '/'
+  install: false
+  discovers:
+    web: true
+    api: false
+    commands: false
+    components: false
+    factories: false
+    views: false

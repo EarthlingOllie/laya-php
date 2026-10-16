@@ -1,0 +1,12 @@
+/vendor/
+/composer.lock
+/build/
+/.phpunit.cache/
+/.phpunit.result.cache
+/infection.log
+/.php-cs-fixer.cache
+/.pint.cache
+/workbench/bootstrap/cache/*
+!/workbench/bootstrap/cache/.gitkeep
+/workbench/storage/
+.DS_Store

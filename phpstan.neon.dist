@@ -1,0 +1,23 @@
+parameters:
+    level: max
+    paths:
+        - src
+        - tests/Support
+        - tests/TestCase.php
+        - tests/Types
+        - tools
+        - workbench
+    tmpDir: build/phpstan
+
+    # Stricter than level max alone. phpstan-strict-rules and larastan are loaded by
+    # phpstan/extension-installer. There is deliberately no baseline: fix, don't ignore.
+    checkBenevolentUnionTypes: true
+    checkUninitializedProperties: true
+    checkImplicitMixed: true
+    checkTooWideReturnTypesInProtectedAndPublicMethods: true
+    reportAlwaysTrueInLastCondition: true
+    reportPossiblyNonexistentGeneralArrayOffset: true
+    reportPossiblyNonexistentConstantArrayOffset: true
+    reportWrongPhpDocTypeInVarTag: true
+    reportAnyTypeWideningInVarTag: true
+    reportUnmatchedIgnoredErrors: true
