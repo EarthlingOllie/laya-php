@@ -14,9 +14,11 @@ use EarthlingOllie\SystemOneClassification\Exceptions\MalformedResponse;
 use EarthlingOllie\SystemOneClassification\Exceptions\RejectedByModel;
 use EarthlingOllie\SystemOneClassification\Result\Answer\Answer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
+use EarthlingOllie\SystemOneClassification\Result\Health;
 use EarthlingOllie\SystemOneClassification\Result\Result;
 use EarthlingOllie\SystemOneClassification\Transport\Response;
 
+use function array_filter;
 use function array_is_list;
 use function is_array;
 use function is_float;
@@ -34,6 +36,8 @@ use function json_encode;
 final readonly class SystemOneCodec
 {
     public const string PATH = '/v1/systemone';
+
+    public const string HEALTH_PATH = '/health';
 
     /**
      * @return array{state: string, questions: array<string, array<string, mixed>>}
@@ -63,25 +67,7 @@ final readonly class SystemOneCodec
      */
     public function decode(Decision $decision, Response $response): Result
     {
-        $body = json_decode($response->body, true);
-        $status = $response->status;
-
-        if ($status >= 500) {
-            throw HostUnavailable::serverError($status, self::detail($body));
-        }
-
-        if ($status >= 400) {
-            throw RejectedByModel::withStatus($status, self::detail($body));
-        }
-
-        if ($status < 200 || $status >= 300) {
-            throw MalformedResponse::because("Unexpected HTTP status {$status}.", $response->body);
-        }
-
-        if (! is_array($body) || array_is_list($body)) {
-            throw MalformedResponse::because('The response is not a JSON object.', $response->body);
-        }
-
+        $body = self::jsonObject($response);
         $answers = $body['answers'] ?? null;
 
         if (! is_array($answers) || array_is_list($answers)) {
@@ -101,6 +87,87 @@ final readonly class SystemOneCodec
         }
 
         return new Result($decoded);
+    }
+
+    /**
+     * Reads a `GET /health` response (laya-serve's; other servers may not have the route).
+     *
+     * @throws HostUnavailable on a 5xx
+     * @throws RejectedByModel on a 4xx
+     * @throws MalformedResponse when the status or body is not what laya-serve sends
+     */
+    public function decodeHealth(Response $response): Health
+    {
+        $body = self::jsonObject($response);
+        $status = $body['status'] ?? null;
+        $loaded = $body['loaded'] ?? null;
+        $revisions = $body['revisions'] ?? [];
+        $device = $body['device'] ?? null;
+
+        if (! is_string($status)) {
+            throw MalformedResponse::because("The health response has no string 'status'.", $response->body);
+        }
+
+        if ($loaded !== null && (! is_array($loaded) || ! array_is_list($loaded) || ! self::allStrings($loaded))) {
+            throw MalformedResponse::because("The health response's 'loaded' is not a list of checkpoint names.", $response->body);
+        }
+
+        if (! is_array($revisions) || ($revisions !== [] && array_is_list($revisions)) || ! self::allStringsOrNull($revisions)) {
+            throw MalformedResponse::because("The health response's 'revisions' is not an object of checkpoint revisions.", $response->body);
+        }
+
+        if ($device !== null && ! is_string($device)) {
+            throw MalformedResponse::because("The health response's 'device' is not a string.", $response->body);
+        }
+
+        /** @var list<string>|null $loaded */
+        /** @var array<string, string|null> $revisions */
+        return new Health($status, $loaded, $revisions, $device);
+    }
+
+    /**
+     * The body of a successful response as a JSON object, after mapping error statuses to exceptions.
+     *
+     * @return array<mixed>
+     *
+     * @throws HostUnavailable on a 5xx
+     * @throws RejectedByModel on a 4xx
+     * @throws MalformedResponse for any other non-2xx status, or a body that is not a JSON object
+     */
+    private static function jsonObject(Response $response): array
+    {
+        $body = json_decode($response->body, true);
+        $status = $response->status;
+
+        if ($status >= 500) {
+            throw HostUnavailable::serverError($status, self::detail($body));
+        }
+
+        if ($status >= 400) {
+            throw RejectedByModel::withStatus($status, self::detail($body));
+        }
+
+        if ($status < 200 || $status >= 300) {
+            throw MalformedResponse::because("Unexpected HTTP status {$status}.", $response->body);
+        }
+
+        if (! is_array($body) || array_is_list($body)) {
+            throw MalformedResponse::because('The response is not a JSON object.', $response->body);
+        }
+
+        return $body;
+    }
+
+    /** @param array<mixed> $values */
+    private static function allStrings(array $values): bool
+    {
+        return array_filter($values, is_string(...)) === $values;
+    }
+
+    /** @param array<mixed> $values */
+    private static function allStringsOrNull(array $values): bool
+    {
+        return array_filter($values, static fn (mixed $value): bool => $value === null || is_string($value)) === $values;
     }
 
     /**

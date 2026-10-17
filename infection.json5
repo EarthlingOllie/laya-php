@@ -16,7 +16,14 @@
         "summary": "build/infection/summary.log"
     },
     "mutators": {
-        "@default": true
+        "@default": true,
+        // file_get_contents() and stream_get_contents() return false only when the read fails, after
+        // TryCommand::text() has checked the file or opened stdin. The casts turn that false into '',
+        // which Context::text() then refuses as empty text; no test can make an existing, readable
+        // file or an open stdin fail to read.
+        "CastString": {
+            "ignore": ["EarthlingOllie\\SystemOneClassification\\Laravel\\Commands\\TryCommand::text"]
+        }
     },
     // Run with --with-uncovered (see `composer mutate`) so that uncovered code counts
     // against the MSI instead of being skipped.

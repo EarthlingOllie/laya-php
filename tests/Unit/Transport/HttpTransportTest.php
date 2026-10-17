@@ -127,3 +127,41 @@ it('defaults to a 30 second timeout', function (): void {
 
     expect($options)->toBeArray()->toHaveKey('timeout', 30.0);
 });
+
+it('gets a path under the base URL as JSON and returns status and raw body', function (): void {
+    $http = new Factory;
+    $http->fake(['*' => Factory::response('{"status":"ok"}', 200)]);
+
+    $response = (new HttpTransport($http, 'https://proxy.test/laya/', 'secret-key'))->get('/health');
+
+    expect($response)->toEqual(new Response(200, '{"status":"ok"}'));
+    $http->assertSent(fn (Request $request): bool => $request->url() === 'https://proxy.test/laya/health'
+        && $request->method() === 'GET'
+        && $request->body() === ''
+        && $request->hasHeader('Accept', 'application/json')
+        && $request->hasHeader('Authorization', 'Bearer secret-key'));
+});
+
+it('gets with the configured timeout and no Authorization header without a key', function (): void {
+    $http = new Factory;
+    $options = null;
+    $http->fake(function (Request $request, array $sent) use (&$options) {
+        $options = $sent;
+
+        return Factory::response('{}', 503);
+    });
+
+    $response = (new HttpTransport($http, 'http://laya.test', '', 4.5))->get('/health');
+
+    expect($response->status)->toBe(503)
+        ->and($options)->toBeArray()->toHaveKey('timeout', 4.5);
+    $http->assertSent(fn (Request $request): bool => ! $request->hasHeader('Authorization'));
+});
+
+it('raises a redacted HostUnavailable when a GET cannot reach the server', function (): void {
+    $http = new Factory;
+    $http->fake(['*' => Factory::failedConnection('cURL error 7: refused (key sk-bearer)')]);
+
+    expect(fn () => (new HttpTransport($http, 'http://ollie:pw@laya.test:8000', 'sk-bearer'))->get('/health'))
+        ->toThrow(HostUnavailable::class, 'The model server at http://***@laya.test:8000 could not be reached: cURL error 7: refused (key ***)');
+});

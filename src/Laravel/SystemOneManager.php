@@ -10,6 +10,7 @@ use EarthlingOllie\SystemOneClassification\Exceptions\InvalidConfiguration;
 use EarthlingOllie\SystemOneClassification\Protocol\SystemOneCodec;
 use EarthlingOllie\SystemOneClassification\Result\Result;
 use EarthlingOllie\SystemOneClassification\Transport\HttpTransport;
+use EarthlingOllie\SystemOneClassification\Transport\Redactor;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Http\Client\Factory;
 
@@ -37,7 +38,55 @@ final readonly class SystemOneManager
      */
     public function connection(?string $name = null): DecisionClient
     {
-        $name ??= $this->defaultConnection();
+        ['url' => $url, 'apiKey' => $apiKey, 'timeout' => $timeout] = $this->settings($name ?? $this->defaultConnection());
+
+        return new DecisionClient(
+            new HttpTransport($this->http, $url, $apiKey, $timeout),
+            new SystemOneCodec,
+        );
+    }
+
+    /** Sends the decision to the default connection. */
+    public function decide(Decision $decision): Result
+    {
+        return $this->connection()->decide($decision);
+    }
+
+    /**
+     * The name of the connection used when none is given (`system-one.default`).
+     *
+     * @throws InvalidConfiguration when it is not set
+     */
+    public function defaultConnection(): string
+    {
+        $name = $this->config->get('system-one.default');
+
+        if (! is_string($name)) {
+            throw InvalidConfiguration::noDefaultConnection();
+        }
+
+        return $name;
+    }
+
+    /**
+     * A connection's URL fit to print: its userinfo, query values and API key masked (Redactor).
+     *
+     * @throws InvalidConfiguration when the connection is missing or malformed
+     */
+    public function displayUrl(?string $name = null): string
+    {
+        ['url' => $url, 'apiKey' => $apiKey] = $this->settings($name ?? $this->defaultConnection());
+
+        return Redactor::forConnection($url, $apiKey)->redact($url);
+    }
+
+    /**
+     * @return array{url: non-empty-string, apiKey: ?string, timeout: float}
+     *
+     * @throws InvalidConfiguration
+     */
+    private function settings(string $name): array
+    {
         $connection = $this->config->get("system-one.connections.{$name}");
 
         if (! is_array($connection)) {
@@ -65,26 +114,6 @@ final readonly class SystemOneManager
             throw InvalidConfiguration::invalidTimeout($name);
         }
 
-        return new DecisionClient(
-            new HttpTransport($this->http, $url, $apiKey, (float) $timeout),
-            new SystemOneCodec,
-        );
-    }
-
-    /** Sends the decision to the default connection. */
-    public function decide(Decision $decision): Result
-    {
-        return $this->connection()->decide($decision);
-    }
-
-    private function defaultConnection(): string
-    {
-        $name = $this->config->get('system-one.default');
-
-        if (! is_string($name)) {
-            throw InvalidConfiguration::noDefaultConnection();
-        }
-
-        return $name;
+        return ['url' => $url, 'apiKey' => $apiKey, 'timeout' => (float) $timeout];
     }
 }

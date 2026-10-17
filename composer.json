@@ -13,7 +13,8 @@
     "require": {
         "php": "^8.4",
         "illuminate/http": "^13.0",
-        "illuminate/support": "^13.0"
+        "illuminate/support": "^13.0",
+        "symfony/yaml": "^7.4 || ^8.0"
     },
     "require-dev": {
         "infection/infection": "^0.35.8",
@@ -67,6 +68,7 @@
         ],
         "mutate": "@php tools/mutate.php --threads=max --with-uncovered --show-mutations --no-progress",
         "post-autoload-dump": [
+            "@php tools/link-testbench-vendor.php",
             "@php vendor/bin/testbench package:discover --ansi"
         ],
         "serve": [

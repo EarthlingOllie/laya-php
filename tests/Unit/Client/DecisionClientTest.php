@@ -11,6 +11,7 @@ use EarthlingOllie\SystemOneClassification\Exceptions\HostUnavailable;
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidDecision;
 use EarthlingOllie\SystemOneClassification\Protocol\SystemOneCodec;
 use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
+use EarthlingOllie\SystemOneClassification\Result\Health;
 use EarthlingOllie\SystemOneClassification\Transport\HttpTransport;
 use EarthlingOllie\SystemOneClassification\Transport\Response;
 use EarthlingOllie\SystemOneClassification\Transport\Transport;
@@ -34,6 +35,11 @@ it('raises the codec error for an error response', function (): void {
     $transport = new readonly class implements Transport
     {
         public function post(string $path, array $body): Response
+        {
+            return new Response(503, '{"detail":"server busy"}');
+        }
+
+        public function get(string $path): Response
         {
             return new Response(503, '{"detail":"server busy"}');
         }
@@ -77,3 +83,15 @@ it('sends nothing for a question type the wire format does not know', function (
         $http->assertNothingSent();
     }
 })->throws(InvalidDecision::class, 'The wire format has no question type for '.QuestionHandle::class.'@anonymous.');
+
+it('asks the server for its health', function (): void {
+    $http = new Factory;
+    $http->fake(['*' => Factory::response(['status' => 'ok', 'loaded' => ['english'], 'revisions' => ['english' => null], 'device' => 'cpu'])]);
+
+    $health = (new DecisionClient(new HttpTransport($http, 'http://laya.test', 'k'), new SystemOneCodec))->health();
+
+    expect($health)->toEqual(new Health('ok', ['english'], ['english' => null], 'cpu'));
+    $http->assertSent(fn (Request $request): bool => $request->url() === 'http://laya.test/health'
+        && $request->method() === 'GET'
+        && $request->hasHeader('Authorization', 'Bearer k'));
+});

@@ -356,11 +356,28 @@ How the typing works:
   by default, because it may contain PII.
 - Optional result caching through Laravel's cache, keyed on the decision, the
   model and the checkpoint revision.
-- Artisan commands:
-  - `system-one:install` publishes the config and Compose files.
-  - `system-one:health` checks the server's health and which checkpoints are
-    loaded.
-  - `system-one:try` runs a question set against some text from the CLI.
+- Artisan commands. Built in #11 (`src/Laravel/Commands/`), each with exit
+  codes 0 (done), 1 (the server or a file it must edit let it down) and 2
+  (input or config it cannot use, before anything is sent or written):
+  - `system-one:install [--mode=standalone|sail]` copies config/system-one.php,
+    then sets up the server (see "Docker" below). It only ever adds: an
+    existing file, service, volume or `.env` key is left as it is, so a second
+    run changes nothing. Without `--mode` it asks, defaulting to standalone;
+    `--no-interaction` takes the default.
+  - `system-one:health [--connection=]` reads `GET /health` through
+    `DecisionClient::health()` (a `Result\Health`: status, loaded checkpoints
+    or null when the server lists none to a keyless request, revisions,
+    device) and prints it with the URL redacted. 1 when unreachable, a 4xx/5xx,
+    an unexpected body or any status but `ok`; 2 for an unknown connection.
+  - `system-one:try [text] [--file=] --yes-no=... [--connection=] [--json]`
+    asks each `--yes-no` (keyed q1, q2, ...) about the argument, the file or
+    stdin (refused with 2 when stdin is a terminal, rather than waiting on it),
+    and prints value, confidence (the reported value's probability) and
+    distribution per answer. Its errors go to stderr, so stdout stays valid JSON
+    under `--json`. Choice and score questions join as `--choice` and
+    `--score` once #4/#5 add them; routing joins once #8's `Result::$meta` lands.
+- `Transport::get()` sits next to `post()` for the health probe; every
+  transport implements both.
 
 ### Docker (part of the package)
 
@@ -397,12 +414,26 @@ bin/
   the proxy's CA (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) and, if the proxy
   blocks the Xet hosts (`cas-server.xethub.hf.co`), `HF_HUB_DISABLE_XET=1`, set
   through a `LAYA_COMPOSE_OVERRIDE` file.
-- `system-one:install` asks which to set up:
-  - **Standalone** (the default): publishes `compose.system-one.yaml` into the
-    app and sets `SYSTEM_ONE_URL=http://localhost:8000` in `.env`.
-  - **Sail**: adds a `laya` service to the app's Sail `docker-compose.yml` and
-    sets `SYSTEM_ONE_URL=http://laya:8000`, so it is reachable from the
-    `laravel.test` container.
+- `system-one:install` asks which to set up. Both files are built from
+  `docker/compose.yaml` at install time (`Laravel\Install\ComposeFiles`), so
+  they cannot drift from it; the build context points at the installed
+  package's `docker/laya` (`./vendor/...` when the package is inside the app).
+  - **Standalone** (the default): writes `compose.system-one.yaml` into the
+    app (the package file without its repo-only header) and sets
+    `SYSTEM_ONE_URL=http://localhost:8000` in `.env`.
+  - **Sail**: adds a `laya` service (on the `sail` network when the file has
+    one) and a `sail-laya` model-cache volume to the app's Sail Compose file
+    (`compose.yaml`, `compose.yml`, `docker-compose.yaml` or
+    `docker-compose.yml`, in Compose's own order) as new lines only, so the
+    existing services and their formatting are untouched, and sets
+    `SYSTEM_ONE_URL=http://laya:8000`, so it is reachable from the
+    `laravel.test` container. The new lines follow the file's own line endings
+    and each section's indentation, and Compose tags such as `!reset` are
+    accepted. A file it cannot edit safely (flow-style `services:`/`volumes:`,
+    not YAML) is refused with exit 1 and left as it is.
+  - The standalone file keeps the package's `name: system-one`, so every app
+    on a machine that uses it shares one server on port 8000 and one copy of
+    the weights (the file's header says so).
 - The repo also has its own dev Compose file, which runs a PHP container next to
   `laya` for integration tests. CI runs the same setup with the HF cache volume
   cached between runs: `.github/workflows/integration.yml` builds the image

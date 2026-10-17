@@ -21,4 +21,11 @@ interface Transport
      * @throws HostUnavailable when the server cannot be reached
      */
     public function post(string $path, array $body): Response;
+
+    /**
+     * A GET with no body, such as laya-serve's `GET /health`.
+     *
+     * @throws HostUnavailable when the server cannot be reached
+     */
+    public function get(string $path): Response;
 }

@@ -111,6 +111,29 @@ it('rejects a default connection name that is not a string', function (): void {
     SystemOne::connection();
 })->throws(InvalidConfiguration::class, 'config/system-one.php has no default connection name.');
 
+it('names the default connection', function (): void {
+    expect(app(SystemOneManager::class)->defaultConnection())->toBe('local');
+
+    config(['system-one.default' => 'other']);
+
+    expect(app(SystemOneManager::class)->defaultConnection())->toBe('other');
+});
+
+it('shows a connection URL with its credentials masked', function (): void {
+    config([
+        'system-one.connections.local.url' => 'http://ollie:pw@laya.test:8000?token=sk-1',
+        'system-one.connections.other' => ['url' => 'https://laya.test/sk-2', 'api_key' => 'sk-2'],
+    ]);
+    $manager = app(SystemOneManager::class);
+
+    expect($manager->displayUrl())->toBe('http://***@laya.test:8000?token=***')
+        ->and($manager->displayUrl('other'))->toBe('https://laya.test/***');
+});
+
+it('refuses to show the URL of a connection that is not configured', function (): void {
+    app(SystemOneManager::class)->displayUrl('nope');
+})->throws(InvalidConfiguration::class, "System One connection 'nope' is not configured in config/system-one.php.");
+
 it('raises HostUnavailable when the server is down', function (): void {
     Http::fake(['*' => Http::failedConnection('Connection refused')]);
 
