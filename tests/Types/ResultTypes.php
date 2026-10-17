@@ -14,10 +14,12 @@ use EarthlingOllie\SystemOneClassification\Domain\Decision;
 use EarthlingOllie\SystemOneClassification\Domain\Question;
 use EarthlingOllie\SystemOneClassification\Domain\Question\ChoiceQuestion;
 use EarthlingOllie\SystemOneClassification\Domain\Question\QuestionHandle;
+use EarthlingOllie\SystemOneClassification\Domain\Question\ScoreQuestion;
 use EarthlingOllie\SystemOneClassification\Domain\Question\YesNoQuestion;
 use EarthlingOllie\SystemOneClassification\Laravel\Facades\SystemOne;
 use EarthlingOllie\SystemOneClassification\Result\Answer\Answer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\ChoiceAnswer;
+use EarthlingOllie\SystemOneClassification\Result\Answer\ScoreAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Confidence;
 use EarthlingOllie\SystemOneClassification\Result\Distribution;
@@ -25,6 +27,7 @@ use EarthlingOllie\SystemOneClassification\Result\Result;
 use EarthlingOllie\SystemOneClassification\Result\Verdict;
 use EarthlingOllie\SystemOneClassification\Tests\Fixtures\Enums\Department;
 use EarthlingOllie\SystemOneClassification\Tests\Fixtures\Enums\Priority;
+use EarthlingOllie\SystemOneClassification\Tests\Fixtures\Enums\Urgency;
 
 use function PHPStan\Testing\assertType;
 
@@ -62,6 +65,28 @@ function choiceAnswerTypes(Result $result): void
     $priority = Question::choice('priority', Priority::class, 'How soon?');
 
     assertType(Priority::class, $result->get($priority)->value);
+}
+
+function scoreAnswerTypes(Result $result): void
+{
+    $urgency = Question::score('urgency', Urgency::class, 'How urgent is this?');
+
+    assertType(ScoreQuestion::class.'<'.Urgency::class.'>', $urgency);
+    assertType(ScoreAnswer::class.'<'.Urgency::class.'>', $result->get($urgency));
+    assertType(Urgency::class, $result->get($urgency)->value);
+    assertType('float', $result->get($urgency)->expected);
+    assertType('float', $result->get($urgency)->answerConfidence);
+    assertType(Confidence::class, $result->get($urgency)->confidence);
+    assertType('bool', $result->get($urgency)->isConfident(0.8));
+    assertType('float', $result->get($urgency)->probabilityOf(Urgency::High));
+    assertType(Distribution::class.'<'.Urgency::class.'>', $result->get($urgency)->distribution);
+    assertType('list<'.Urgency::class.'>', $result->get($urgency)->distribution->cases());
+    assertType('list<array{case: '.Urgency::class.', probability: float}>', $result->get($urgency)->distribution->entries());
+    assertType('non-empty-list<array{case: '.Urgency::class.', value: int, description: string}>', $urgency->levels());
+
+    // The enum comes back as itself: its cases and backing value need no cast.
+    assertType('0|1|2|3', $result->get($urgency)->value->value);
+    assertType('bool', $result->get($urgency)->value === Urgency::Critical);
 }
 
 /**

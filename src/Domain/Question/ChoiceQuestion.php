@@ -5,12 +5,8 @@ declare(strict_types=1);
 namespace EarthlingOllie\SystemOneClassification\Domain\Question;
 
 use BackedEnum;
-use EarthlingOllie\SystemOneClassification\Domain\Describe;
-use EarthlingOllie\SystemOneClassification\Domain\DescribesCases;
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidDecision;
 use EarthlingOllie\SystemOneClassification\Result\Answer\ChoiceAnswer;
-use Error;
-use ReflectionClassConstant;
 
 use function enum_exists;
 use function is_subclass_of;
@@ -88,20 +84,7 @@ final readonly class ChoiceQuestion implements QuestionHandle
 
     private static function describe(string $key, BackedEnum $case): ?string
     {
-        if ($case instanceof DescribesCases) {
-            $description = $case->describe();
-        } else {
-            $attributes = new ReflectionClassConstant($case, $case->name)->getAttributes(Describe::class);
-
-            // PHP checks an attribute's arguments, and that it is not repeated, only when it is
-            // built here. Every such failure is an Error (ArgumentCountError and TypeError among
-            // them), and Describe's constructor does nothing else that could throw.
-            try {
-                $description = ($attributes[0] ?? null)?->newInstance()->description;
-            } catch (Error $e) {
-                throw InvalidDecision::malformedDescribe($key, $case, $e);
-            }
-        }
+        $description = CaseDescription::of($case, "Option '{$case->value}' of choice question '{$key}'");
 
         if ($description !== null && trim($description) === '') {
             throw InvalidDecision::blankDescription($key, (string) $case->value);

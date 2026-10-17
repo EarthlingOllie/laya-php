@@ -9,6 +9,7 @@ use Closure;
 use EarthlingOllie\SystemOneClassification\Domain\Decision;
 use EarthlingOllie\SystemOneClassification\Domain\Question\ChoiceQuestion;
 use EarthlingOllie\SystemOneClassification\Domain\Question\QuestionHandle;
+use EarthlingOllie\SystemOneClassification\Domain\Question\ScoreQuestion;
 use EarthlingOllie\SystemOneClassification\Domain\Question\YesNoQuestion;
 use EarthlingOllie\SystemOneClassification\Exceptions\HostUnavailable;
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidDecision;
@@ -16,6 +17,7 @@ use EarthlingOllie\SystemOneClassification\Exceptions\MalformedResponse;
 use EarthlingOllie\SystemOneClassification\Exceptions\RejectedByModel;
 use EarthlingOllie\SystemOneClassification\Result\Answer\Answer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\ChoiceAnswer;
+use EarthlingOllie\SystemOneClassification\Result\Answer\ScoreAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Confidence;
 use EarthlingOllie\SystemOneClassification\Result\Distribution;
@@ -23,10 +25,12 @@ use EarthlingOllie\SystemOneClassification\Result\Result;
 use EarthlingOllie\SystemOneClassification\Transport\Response;
 use stdClass;
 
+use function array_column;
 use function array_diff;
 use function array_is_list;
 use function array_keys;
 use function array_map;
+use function count;
 use function implode;
 use function is_array;
 use function is_float;
@@ -34,6 +38,7 @@ use function is_int;
 use function is_string;
 use function json_decode;
 use function json_encode;
+use function ksort;
 
 /**
  * Maps a Decision to the System One wire format (`POST /v1/systemone`, shared by laya-serve
@@ -142,6 +147,14 @@ final readonly class SystemOneCodec
                 ],
                 'decode' => fn (array $answer, string $body): ChoiceAnswer => $this->decodeChoice($question, $answer, $body),
             ],
+            $question instanceof ScoreQuestion => [
+                'request' => static fn (): array => [
+                    'type' => 'score',
+                    'instructions' => $question->instructions,
+                    'criteria' => $question->criteria(),
+                ],
+                'decode' => fn (array $answer, string $body): ScoreAnswer => $this->decodeScore($question, $answer, $body),
+            ],
             $question instanceof YesNoQuestion => [
                 'request' => static fn (): array => ['type' => 'noul', 'instructions' => $question->instructions],
                 'decode' => static fn (array $answer, string $body): YesNoAnswer => self::decodeYesNo($question->key, $answer, $body),
@@ -151,15 +164,25 @@ final readonly class SystemOneCodec
     }
 
     /**
+     * The answer's `type` must be the one the question was sent as.
+     *
+     * @param  array<mixed>  $answer
+     */
+    private static function checkType(string $key, array $answer, string $type, string $body): void
+    {
+        $got = $answer['type'] ?? null;
+
+        if ($got !== $type) {
+            throw MalformedResponse::because("The answer for '{$key}' should have type '{$type}', got ".json_encode($got, JSON_THROW_ON_ERROR).'.', $body);
+        }
+    }
+
+    /**
      * @param  array<mixed>  $answer
      */
     private static function decodeYesNo(string $key, array $answer, string $body): YesNoAnswer
     {
-        $type = $answer['type'] ?? null;
-
-        if ($type !== 'noul') {
-            throw MalformedResponse::because("The answer for '{$key}' should have type 'noul', got ".json_encode($type, JSON_THROW_ON_ERROR).'.', $body);
-        }
+        self::checkType($key, $answer, 'noul', $body);
 
         $probability = $answer['noul'] ?? null;
 
@@ -201,11 +224,7 @@ final readonly class SystemOneCodec
     private function decodeChoice(ChoiceQuestion $question, array $answer, string $body): ChoiceAnswer
     {
         $key = $question->key;
-        $type = $answer['type'] ?? null;
-
-        if ($type !== 'choice') {
-            throw MalformedResponse::because("The answer for '{$key}' should have type 'choice', got ".json_encode($type, JSON_THROW_ON_ERROR).'.', $body);
-        }
+        self::checkType($key, $answer, 'choice', $body);
 
         $choice = $answer['choice'] ?? null;
 
@@ -213,65 +232,194 @@ final readonly class SystemOneCodec
             throw MalformedResponse::because("The answer for '{$key}' has no string 'choice'.", $body);
         }
 
-        // JSON object keys that are whole numbers come back from json_decode() as int keys, and
-        // an object keyed "0", "1", ... as a list, so labels are matched as strings.
-        $probabilities = $answer['probabilities'] ?? null;
-
-        if (! is_array($probabilities)) {
-            throw MalformedResponse::because("The answer for '{$key}' has no 'probabilities' object.", $body);
-        }
-
+        $labelled = [];
         $chosen = null;
-        $entries = [];
-        $labels = [];
 
         foreach ($question->options() as ['case' => $case]) {
             $label = (string) $case->value;
-            $labels[] = $label;
-            $probability = $probabilities[$label] ?? null;
-
-            if (! is_int($probability) && ! is_float($probability)) {
-                throw MalformedResponse::because("The answer for '{$key}' has no numeric probability for '{$label}'.", $body);
-            }
-
-            if ($probability < 0 || $probability > 1) {
-                throw MalformedResponse::because("The answer for '{$key}' has a probability for '{$label}' outside [0, 1]: {$probability}.", $body);
-            }
-
-            $entries[] = ['case' => $case, 'probability' => (float) $probability];
+            $labelled[] = ['label' => $label, 'case' => $case, 'shown' => "'{$label}'"];
 
             if ($label === $choice) {
                 $chosen = $case;
             }
         }
 
-        // array_diff() compares as strings, so int keys match their whole-number labels.
-        $extra = array_diff(array_keys($probabilities), $labels);
-
-        if ($extra !== []) {
-            $quoted = implode(', ', array_map(static fn (int|string $label): string => "'{$label}'", $extra));
-
-            throw MalformedResponse::because("The answer for '{$key}' has probabilities for labels that are not options of {$question->enum}: {$quoted}.", $body);
-        }
+        $distribution = self::distribution($key, $answer, $labelled, "options of {$question->enum}", $body);
 
         if ($chosen === null) {
             throw MalformedResponse::because("The answer for '{$key}' names '{$choice}', which is not an option of {$question->enum}.", $body);
         }
 
+        // The raw confidence first, so a response wrong in both says so about it, as it always has.
+        $confidence = $this->confidence($key, $answer, $body);
+
+        return new ChoiceAnswer(
+            $chosen,
+            self::answerConfidence($key, $answer, $distribution->probabilityOf($chosen), $body),
+            $confidence,
+            $distribution,
+        );
+    }
+
+    /**
+     * @template TEnum of BackedEnum
+     *
+     * @param  ScoreQuestion<TEnum>  $question
+     * @param  array<mixed>  $answer
+     * @return ScoreAnswer<TEnum>
+     */
+    private function decodeScore(ScoreQuestion $question, array $answer, string $body): ScoreAnswer
+    {
+        $key = $question->key;
+        self::checkType($key, $answer, 'score', $body);
+
+        // The server knows the levels only by index, lowest first: criteria went out as a
+        // list, and legend and probabilities come back keyed "0", "1", ... (int keys here).
+        // Its `score` is the expected index; ScoreAnswer takes the expected level over the
+        // backing values from the probabilities instead, so the score is only checked.
+        $levels = $question->levels();
+        $highestIndex = count($levels) - 1;
+        $score = $answer['score'] ?? null;
+
+        if (! is_int($score) && ! is_float($score)) {
+            throw MalformedResponse::because("The answer for '{$key}' has no numeric 'score'.", $body);
+        }
+
+        if ($score < 0 || $score > $highestIndex) {
+            throw MalformedResponse::because("The answer for '{$key}' has a 'score' outside the level indexes 0 to {$highestIndex}: {$score}.", $body);
+        }
+
+        self::checkLegend($question, $answer, $body);
+
+        $labelled = [];
+
+        foreach ($levels as $index => ['case' => $case]) {
+            // The index is not the backing value unless the levels are 0..n-1: name the case too.
+            $labelled[] = ['label' => $index, 'case' => $case, 'shown' => "'{$index}' (".$case::class."::{$case->name})"];
+        }
+
+        $distribution = self::distribution($key, $answer, $labelled, "levels of {$question->enum}", $body);
+        $value = null;
+        $highest = 0.0;
+
+        // The server sends no most likely level for a score, only probabilities rounded to 4
+        // places, so the lowest of levels equally likely after rounding wins (as np.argmax
+        // picks the first). A level with probability 0 is never the most likely one, so all
+        // zeros leave no value.
+        foreach ($distribution->entries() as ['case' => $case, 'probability' => $probability]) {
+            if ($probability > $highest) {
+                $value = $case;
+                $highest = $probability;
+            }
+        }
+
+        if ($value === null) {
+            throw MalformedResponse::because("The answer for '{$key}' gives no level a probability above 0.", $body);
+        }
+
+        $confidence = $this->confidence($key, $answer, $body);
+
+        return new ScoreAnswer(
+            $value,
+            self::answerConfidence($key, $answer, $highest, $body),
+            $confidence,
+            $distribution,
+        );
+    }
+
+    /**
+     * The legend must name every level, by index, with the description that was sent: a
+     * mismatch means the server scored some other scale.
+     *
+     * @template TEnum of BackedEnum
+     *
+     * @param  ScoreQuestion<TEnum>  $question
+     * @param  array<mixed>  $answer
+     */
+    private static function checkLegend(ScoreQuestion $question, array $answer, string $body): void
+    {
+        $legend = $answer['legend'] ?? null;
+
+        if (! is_array($legend)) {
+            throw MalformedResponse::because("The answer for '{$question->key}' has no 'legend' object.", $body);
+        }
+
+        $expected = $question->criteria();
+        $sorted = $legend;
+        ksort($sorted);
+
+        if ($sorted !== $expected) {
+            $json = static fn (array $legend): string => json_encode($legend, JSON_THROW_ON_ERROR | JSON_FORCE_OBJECT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+            throw MalformedResponse::because("The answer for '{$question->key}' has a legend that does not match the levels of {$question->enum}: expected {$json($expected)}, got {$json($legend)}.", $body);
+        }
+    }
+
+    /**
+     * The answer's `probabilities`, one per label, as a Distribution in the order given.
+     *
+     * JSON object keys that are whole numbers come back from json_decode() as int keys, and an
+     * object keyed "0", "1", ... as a list; PHP looks a whole-number string label up as that
+     * int key, so a label may be either.
+     *
+     * @template TEnum of BackedEnum
+     *
+     * @param  array<mixed>  $answer
+     * @param  non-empty-list<array{label: int|string, case: TEnum, shown: string}>  $labelled  each
+     *                                                                                          label with its case and how a message names it
+     * @param  string  $labels  what the labels are, for the message ("options of Department")
+     * @return Distribution<TEnum>
+     */
+    private static function distribution(string $key, array $answer, array $labelled, string $labels, string $body): Distribution
+    {
+        $probabilities = $answer['probabilities'] ?? null;
+
+        if (! is_array($probabilities)) {
+            throw MalformedResponse::because("The answer for '{$key}' has no 'probabilities' object.", $body);
+        }
+
+        $entries = [];
+
+        foreach ($labelled as ['label' => $label, 'case' => $case, 'shown' => $shown]) {
+            $probability = $probabilities[$label] ?? null;
+
+            if (! is_int($probability) && ! is_float($probability)) {
+                throw MalformedResponse::because("The answer for '{$key}' has no numeric probability for {$shown}.", $body);
+            }
+
+            if ($probability < 0 || $probability > 1) {
+                throw MalformedResponse::because("The answer for '{$key}' has a probability for {$shown} outside [0, 1]: {$probability}.", $body);
+            }
+
+            $entries[] = ['case' => $case, 'probability' => (float) $probability];
+        }
+
+        // array_diff() compares as strings, so int keys match their whole-number labels.
+        $extra = array_diff(array_keys($probabilities), array_column($labelled, 'label'));
+
+        if ($extra !== []) {
+            $quoted = implode(', ', array_map(static fn (int|string $label): string => "'{$label}'", $extra));
+
+            throw MalformedResponse::because("The answer for '{$key}' has probabilities for labels that are not {$labels}: {$quoted}.", $body);
+        }
+
+        return new Distribution($entries);
+    }
+
+    /**
+     * The model's raw `confidence`, tagged with this codec's profile.
+     *
+     * @param  array<mixed>  $answer
+     */
+    private function confidence(string $key, array $answer, string $body): Confidence
+    {
         $confidence = $answer['confidence'] ?? null;
 
         if (! is_int($confidence) && ! is_float($confidence)) {
             throw MalformedResponse::because("The answer for '{$key}' has no numeric 'confidence'.", $body);
         }
 
-        $distribution = new Distribution($entries);
-
-        return new ChoiceAnswer(
-            $chosen,
-            self::answerConfidence($key, $answer, $distribution->probabilityOf($chosen), $body),
-            new Confidence((float) $confidence, $this->profile),
-            $distribution,
-        );
+        return new Confidence((float) $confidence, $this->profile);
     }
 
     /**

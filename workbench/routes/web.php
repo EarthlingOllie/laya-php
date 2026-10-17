@@ -16,6 +16,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Route;
 use Workbench\App\Enums\Department;
+use Workbench\App\Enums\Urgency;
 
 /*
  * Status page of the workbench app: shows whether the package's service provider was
@@ -39,6 +40,7 @@ Route::get('/', function (Application $app): string {
             <p id="provider" data-provider-loaded="{$state}"><code>{$provider}</code>: <strong>{$label}</strong></p>
             <p><a href="/decide">Ask one yes/no question</a></p>
             <p><a href="/choose">Ask one choice question</a></p>
+            <p><a href="/score">Ask one score question</a></p>
         </body>
         </html>
         HTML;
@@ -166,4 +168,48 @@ Route::get('/choose', function (Request $request) use ($ticket, $failure, $page)
     }
 
     return new Response($page('One choice question', e($text), e($department->instructions), $outcome), $status);
+});
+
+/*
+ * One score question over Workbench\App\Enums\Urgency: the most likely level, the expected
+ * level (on the backing values), both confidences, isConfident(0.6) and the distribution
+ * in level order.
+ */
+Route::get('/score', function (Request $request) use ($ticket, $failure, $page): Response {
+    $text = $ticket($request);
+    $urgency = Question::score('urgency', Urgency::class, 'How urgent is this?');
+    $status = 200;
+
+    try {
+        $answer = SystemOne::decide(Decision::about(Context::text($text))->ask($urgency))->get($urgency);
+        $value = e($answer->value->name);
+        $expected = e((string) $answer->expected);
+        $answerConfidence = e((string) $answer->answerConfidence);
+        $confidence = e((string) $answer->confidence->value);
+        $profile = e($answer->confidence->profile);
+        $confident = $answer->isConfident(0.6) ? 'yes' : 'no';
+        $rows = '';
+
+        foreach ($answer->distribution->entries() as ['case' => $case, 'probability' => $probability]) {
+            $name = e($case->name);
+            $level = e((string) $case->value);
+            $shown = e((string) $probability);
+            $rows .= "<tr data-case=\"{$name}\" data-level=\"{$level}\" data-probability=\"{$shown}\"><td>{$name}</td><td>{$level}</td><td>{$shown}</td></tr>";
+        }
+
+        $outcome = <<<HTML
+            <dl id="answer" data-value="{$value}" data-expected="{$expected}" data-answer-confidence="{$answerConfidence}" data-confidence="{$confidence}" data-profile="{$profile}" data-confident="{$confident}">
+                <dt>value</dt><dd>Urgency::{$value}</dd>
+                <dt>expected</dt><dd>{$expected}</dd>
+                <dt>answerConfidence</dt><dd>{$answerConfidence}</dd>
+                <dt>confidence ({$profile})</dt><dd>{$confidence}</dd>
+                <dt>isConfident(0.6)</dt><dd>{$confident}</dd>
+            </dl>
+            <table id="distribution"><tr><th>level</th><th>value</th><th>probability</th></tr>{$rows}</table>
+            HTML;
+    } catch (SystemOneException $exception) {
+        [$status, $outcome] = $failure($exception);
+    }
+
+    return new Response($page('One score question', e($text), e($urgency->instructions), $outcome), $status);
 });

@@ -215,6 +215,13 @@ it('raises MalformedResponse for a choice answer that does not match the protoco
     ],
 ]);
 
+// Review finding 4: the raw confidence is checked before answer_confidence, as before the
+// score refactor, so the same response reports the same problem.
+it('reports a missing raw confidence before a malformed answer_confidence', function (): void {
+    expect(fn () => decodeChoice(departmentQuestion(), departmentAnswer(['confidence' => null, 'answer_confidence' => 'high'])))
+        ->toThrow(MalformedResponse::class, "The answer for 'department' has no numeric 'confidence'.");
+});
+
 it('reads a choice and a yes/no answer from one response', function (): void {
     $department = departmentQuestion();
     $churn = Question::yesNo('churn', 'Do they threaten to cancel?');

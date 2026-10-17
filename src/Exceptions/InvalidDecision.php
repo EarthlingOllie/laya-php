@@ -63,14 +63,38 @@ final class InvalidDecision extends InvalidArgumentException implements SystemOn
      * PHP's own Error stays attached as the previous exception: it names the file and line of
      * the attribute, and there is nothing secret in it.
      */
-    public static function malformedDescribe(string $key, BackedEnum $case, Error $previous): self
+    public static function malformedDescribe(string $subject, BackedEnum $case, Error $previous): self
     {
         $enum = $case::class;
 
         return new self(
-            "Option '{$case->value}' of choice question '{$key}' has a #[Describe] on {$enum}::{$case->name} that PHP cannot build: {$previous->getMessage()}",
+            "{$subject} has a #[Describe] on {$enum}::{$case->name} that PHP cannot build: {$previous->getMessage()}",
             previous: $previous,
         );
+    }
+
+    public static function notIntBackedEnum(string $key, string $class): self
+    {
+        return new self("Score question '{$key}' needs an int-backed enum (enum X: int), whose backing values order its levels; {$class} is not an int-backed enum.");
+    }
+
+    public static function noLevels(string $key, string $enum): self
+    {
+        return new self("Score question '{$key}' has no levels: {$enum} has no cases.");
+    }
+
+    public static function undescribedLevel(string $key, BackedEnum $case): self
+    {
+        $enum = $case::class;
+
+        return new self("Level {$case->value} of score question '{$key}' has no description: give {$enum}::{$case->name} a #[Describe], because Laya rejects a score level without one.");
+    }
+
+    public static function blankLevelDescription(string $key, BackedEnum $case): self
+    {
+        $enum = $case::class;
+
+        return new self("Level {$case->value} of score question '{$key}' has a blank description: describe {$enum}::{$case->name}, because Laya rejects a score level without one.");
     }
 
     public static function duplicateKey(string $key): self
