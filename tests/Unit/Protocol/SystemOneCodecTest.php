@@ -375,3 +375,53 @@ it('refuses a handle from another decision that reuses the key with other instru
 
     $result->get(Question::yesNo('churn', 'Is the customer happy with the product?'));
 })->throws(UnknownQuestion::class, "The result's question 'churn' is not the one passed to get(): it was asked with other instructions or settings, so the handle is from another decision.");
+
+it('sends a model between the state and the request controls when one is given', function (): void {
+    $body = (new SystemOneCodec)->encode(churnDecision()->withMaxLength(64), 'english');
+
+    expect(array_keys($body))->toBe(['state', 'model', 'max_len', 'questions'])
+        ->and($body['model'] ?? null)->toBe('english');
+});
+
+it('sends no model when none is given, so the server routes', function (): void {
+    expect((new SystemOneCodec)->encode(churnDecision()))->not->toHaveKey('model')
+        ->and((new SystemOneCodec)->encode(churnDecision(), null))->not->toHaveKey('model');
+});
+
+it('reads the checkpoint revisions from a health response, ordered by checkpoint', function (): void {
+    $response = okResponse(['status' => 'ok', 'loaded' => ['multilingual', 'english'], 'revisions' => ['multilingual' => 'bbb', 'english' => 'aaa']]);
+
+    expect((new SystemOneCodec)->decodeRevisions($response))->toBe(['english' => 'aaa', 'multilingual' => 'bbb'])
+        ->and(SystemOneCodec::HEALTH_PATH)->toBe('/health');
+});
+
+it('reads a checkpoint without a revision as null, and no loaded checkpoint as no revisions', function (): void {
+    expect((new SystemOneCodec)->decodeRevisions(okResponse(['revisions' => ['english' => null]])))->toBe(['english' => null])
+        ->and((new SystemOneCodec)->decodeRevisions(new Response(200, '{"revisions":{}}')))->toBe([]);
+});
+
+it('reads a revisions object whose checkpoint names are whole numbers from zero, which PHP would make a list', function (): void {
+    expect((new SystemOneCodec)->decodeRevisions(new Response(200, '{"revisions":{"0":"a","1":"b"}}')))->toBe([0 => 'a', 1 => 'b']);
+});
+
+it('raises the decision errors for a health response with an error status', function (int $status, string $exception): void {
+    expect(fn () => (new SystemOneCodec)->decodeRevisions(new Response($status, '{"detail":"nope"}')))
+        ->toThrow($exception, 'nope');
+})->with([
+    [503, HostUnavailable::class],
+    [401, RejectedByModel::class],
+    [404, RejectedByModel::class],
+]);
+
+it('raises MalformedResponse for a health response without usable revisions', function (int $status, string $body, string $message): void {
+    expect(fn () => (new SystemOneCodec)->decodeRevisions(new Response($status, $body)))
+        ->toThrow(MalformedResponse::class, $message);
+})->with([
+    'redirect' => [302, '{}', 'Unexpected HTTP status 302.'],
+    'not json' => [200, '<html>', 'The health response is not a JSON object.'],
+    'a list' => [200, '[1]', 'The health response is not a JSON object.'],
+    'no revisions' => [200, '{"status":"ok"}', "The health response has no 'revisions' object."],
+    'revisions a list' => [200, '{"revisions":["abc"]}', "The health response has no 'revisions' object."],
+    'revisions a string' => [200, '{"revisions":"abc"}', "The health response has no 'revisions' object."],
+    'a numeric revision' => [200, '{"revisions":{"english":7}}', "The health response's revision for 'english' is not a string."],
+]);

@@ -97,6 +97,20 @@ it('rejects a connection without a usable URL', function (array $connection, str
     'bad key' => [['url' => 'http://x', 'api_key' => 5], "System One connection 'broken' has an 'api_key' that is not a string."],
     'bad timeout' => [['url' => 'http://x', 'timeout' => 'soon'], "System One connection 'broken' has a 'timeout' that is not a number of seconds."],
     'zero timeout' => [['url' => 'http://x', 'timeout' => 0], "System One connection 'broken' has a 'timeout' that is not a number of seconds."],
+    'bad model' => [['url' => 'http://x', 'model' => ['english']], "System One connection 'broken' has a 'model' that is not a string."],
+]);
+
+it('sends the connection model with every decision, and none when it is empty', function (?string $model, array $sent): void {
+    config(['system-one.connections.local' => ['url' => 'http://laya.test', 'model' => $model]]);
+    Http::fake(['*' => Http::response(['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.1]]])]);
+
+    SystemOne::decide(Decision::about(Context::text('x'))->ask(churnQuestion()));
+
+    Http::assertSent(fn (Request $request): bool => array_intersect_key($request->data(), ['model' => true]) === $sent);
+})->with([
+    'a model' => ['multilingual', ['model' => 'multilingual']],
+    'empty' => ['', []],
+    'null' => [null, []],
 ]);
 
 it('rejects a connection that is not an array', function (): void {

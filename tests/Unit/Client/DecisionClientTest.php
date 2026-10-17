@@ -13,9 +13,9 @@ use EarthlingOllie\SystemOneClassification\Exceptions\HostUnavailable;
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidDecision;
 use EarthlingOllie\SystemOneClassification\Protocol\SystemOneCodec;
 use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
+use EarthlingOllie\SystemOneClassification\Tests\Support\ScriptedTransport;
 use EarthlingOllie\SystemOneClassification\Transport\HttpTransport;
 use EarthlingOllie\SystemOneClassification\Transport\Response;
-use EarthlingOllie\SystemOneClassification\Transport\Transport;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
 
@@ -30,6 +30,16 @@ it('sends the encoded decision through the transport and decodes the answer', fu
     expect($result->get($churn)->probability)->toBe(0.91);
     $http->assertSent(fn (Request $request): bool => $request->url() === 'http://laya.test/v1/systemone'
         && $request->data() === (new SystemOneCodec)->encode($decision));
+});
+
+it('sends the model it was built with', function (): void {
+    $decision = Decision::about(Context::text('We will cancel.'))->ask(Question::yesNo('churn', 'Cancel?'));
+    $http = new Factory;
+    $http->fake(['*' => Factory::response(['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.5]]])]);
+
+    (new DecisionClient(new HttpTransport($http, 'http://laya.test'), new SystemOneCodec, model: 'multilingual'))->decide($decision);
+
+    $http->assertSent(fn (Request $request): bool => $request->data() === (new SystemOneCodec)->encode($decision, 'multilingual'));
 });
 
 /** A clock that returns the given readings, one per call, and records how often it was read. */
@@ -56,13 +66,7 @@ function steppedClock(float ...$readings): Clock
 }
 
 it('measures the latency of the round trip with its clock, in milliseconds', function (): void {
-    $transport = new readonly class implements Transport
-    {
-        public function post(string $path, array $body): Response
-        {
-            return new Response(200, '{"model":"laya-rl-agent","answers":{"churn":{"type":"noul","noul":0.5}}}');
-        }
-    };
+    $transport = new ScriptedTransport([new Response(200, '{"model":"laya-rl-agent","answers":{"churn":{"type":"noul","noul":0.5}}}')]);
     $decision = Decision::about(Context::text('x'))->ask(Question::yesNo('churn', 'Cancel?'));
 
     $meta = (new DecisionClient($transport, new SystemOneCodec, steppedClock(100.25, 100.5)))->decide($decision)->meta;
@@ -73,17 +77,7 @@ it('measures the latency of the round trip with its clock, in milliseconds', fun
 
 it('starts the clock after encoding and stops it before decoding', function (): void {
     $order = new ArrayObject;
-    $transport = new readonly class($order) implements Transport
-    {
-        public function __construct(private ArrayObject $order) {}
-
-        public function post(string $path, array $body): Response
-        {
-            $this->order->append('post');
-
-            return new Response(200, '{"answers":{"churn":{"type":"noul","noul":0.5}}}');
-        }
-    };
+    $transport = new ScriptedTransport([new Response(200, '{"answers":{"churn":{"type":"noul","noul":0.5}}}')], log: $order);
     $clock = new readonly class($order) implements Clock
     {
         public function __construct(private ArrayObject $order) {}
@@ -99,7 +93,7 @@ it('starts the clock after encoding and stops it before decoding', function (): 
 
     (new DecisionClient($transport, new SystemOneCodec, $clock))->decide($decision);
 
-    expect($order->getArrayCopy())->toBe(['clock', 'post', 'clock']);
+    expect($order->getArrayCopy())->toBe(['clock', 'POST /v1/systemone', 'clock']);
 });
 
 it('reads no clock for a decision it refuses to send', function (): void {
@@ -132,13 +126,7 @@ it('reads a monotonic system clock in seconds', function (): void {
 });
 
 it('raises the codec error for an error response', function (): void {
-    $transport = new readonly class implements Transport
-    {
-        public function post(string $path, array $body): Response
-        {
-            return new Response(503, '{"detail":"server busy"}');
-        }
-    };
+    $transport = new ScriptedTransport([new Response(503, '{"detail":"server busy"}')]);
     $decision = Decision::about(Context::text('x'))->ask(Question::yesNo('churn', 'Cancel?'));
 
     (new DecisionClient($transport, new SystemOneCodec))->decide($decision);

@@ -49,6 +49,12 @@ it('points the local connection at http://localhost:8000 when SYSTEM_ONE_URL is 
         'SYSTEM_ONE_URL' => null,
         'SYSTEM_ONE_API_KEY' => null,
         'SYSTEM_ONE_TIMEOUT' => null,
+        'SYSTEM_ONE_MODEL' => null,
+        'SYSTEM_ONE_EVENTS' => null,
+        'SYSTEM_ONE_EVENTS_INCLUDE_CONTEXT' => null,
+        'SYSTEM_ONE_CACHE' => null,
+        'SYSTEM_ONE_CACHE_STORE' => null,
+        'SYSTEM_ONE_CACHE_TTL' => null,
     ]);
 
     expect($config)->toBe([
@@ -58,9 +64,27 @@ it('points the local connection at http://localhost:8000 when SYSTEM_ONE_URL is 
                 'url' => 'http://localhost:8000',
                 'api_key' => null,
                 'timeout' => 30,
+                'model' => null,
             ],
         ],
+        'events' => ['enabled' => true, 'include_context' => false],
+        'cache' => ['enabled' => false, 'store' => null, 'ttl' => 3600],
     ]);
+});
+
+it('takes the model, event and cache settings from the environment', function (): void {
+    $config = systemOneConfigWith([
+        'SYSTEM_ONE_MODEL' => 'multilingual',
+        'SYSTEM_ONE_EVENTS' => 'false',
+        'SYSTEM_ONE_EVENTS_INCLUDE_CONTEXT' => 'true',
+        'SYSTEM_ONE_CACHE' => 'true',
+        'SYSTEM_ONE_CACHE_STORE' => 'redis',
+        'SYSTEM_ONE_CACHE_TTL' => '600',
+    ]);
+
+    expect($config['connections']['local']['model'])->toBe('multilingual')
+        ->and($config['events'])->toBe(['enabled' => false, 'include_context' => true])
+        ->and($config['cache'])->toBe(['enabled' => true, 'store' => 'redis', 'ttl' => '600']);
 });
 
 it('takes the local base URL, key and timeout from the environment', function (): void {
@@ -71,7 +95,7 @@ it('takes the local base URL, key and timeout from the environment', function ()
     ]);
 
     expect($config['connections'])->toBe([
-        'local' => ['url' => 'http://laya:8000', 'api_key' => 'secret', 'timeout' => '5'],
+        'local' => ['url' => 'http://laya:8000', 'api_key' => 'secret', 'timeout' => '5', 'model' => null],
     ]);
 });
 

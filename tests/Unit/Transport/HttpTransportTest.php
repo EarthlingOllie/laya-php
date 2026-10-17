@@ -127,3 +127,39 @@ it('defaults to a 30 second timeout', function (): void {
 
     expect($options)->toBeArray()->toHaveKey('timeout', 30.0);
 });
+
+it('gets a path under the base URL with the API key and returns status and raw body', function (): void {
+    $http = new Factory;
+    $http->fake(['*' => Factory::response('{"status":"ok"}', 200)]);
+
+    $response = (new HttpTransport($http, 'http://laya.test:8000', 'secret-key'))->get('/health');
+
+    expect($response)->toEqual(new Response(200, '{"status":"ok"}'));
+    $http->assertSent(fn (Request $request): bool => $request->url() === 'http://laya.test:8000/health'
+        && $request->method() === 'GET'
+        && $request->hasHeader('Accept', 'application/json')
+        && $request->hasHeader('Authorization', 'Bearer secret-key'));
+});
+
+it('applies the timeout to a get and returns its error statuses as responses', function (): void {
+    $http = new Factory;
+    $options = null;
+    $http->fake(function (Request $request, array $sent) use (&$options) {
+        $options = $sent;
+
+        return Factory::response('{"detail":"Not Found"}', 404);
+    });
+
+    expect((new HttpTransport($http, 'http://laya.test', timeout: 4.0))->get('/health'))
+        ->toEqual(new Response(404, '{"detail":"Not Found"}'))
+        ->and($options)->toBeArray()->toHaveKey('timeout', 4.0);
+});
+
+it('keeps the URL credentials and API key out of HostUnavailable from a get', function (): void {
+    $http = new Factory;
+    $http->fake(['*' => Factory::failedConnection('cURL error 7: refused (key sk-bearer)')]);
+    $transport = new HttpTransport($http, 'http://ollie:s3cret-pass@laya.test', 'sk-bearer');
+
+    expect(fn () => $transport->get('/health'))
+        ->toThrow(HostUnavailable::class, 'The model server at http://***@laya.test could not be reached: cURL error 7: refused (key ***)');
+});

@@ -2,8 +2,11 @@
 
 declare(strict_types=1);
 
+use EarthlingOllie\SystemOneClassification\Laravel\Events\DecisionMade;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Orchestra\Testbench\Concerns\WithWorkbench;
 
 /*
@@ -135,3 +138,77 @@ it('falls back to the default ticket when the text is not a string or is blank',
 
     Http::assertSent(fn (Request $request): bool => str_contains((string) $request['state'], 'billed twice for March'));
 })->with(['array' => 'text[]=x', 'nested array' => 'text[a][b]=x', 'blank' => 'text=%20%20', 'empty' => 'text=']);
+
+it('shows the DecisionMade event the decision dispatched, without the context text', function (): void {
+    Http::fake(['*' => Http::response([
+        'model' => 'laya-rl-agent',
+        'answers' => ['churn' => ['type' => 'noul', 'noul' => 0.7]],
+        'routing' => ['model' => 'english', 'reason' => 'English Latin text'],
+        'usage' => ['input_tokens' => 57, 'output_tokens' => 0],
+    ])]);
+
+    $response = $this->get('/decide?text='.urlencode('Jane Doe will cancel.'))->assertOk();
+
+    $response->assertSee('data-event="DecisionMade"', escape: false)
+        ->assertSee('data-connection="local"', escape: false)
+        ->assertSee('data-question-keys="churn"', escape: false)
+        ->assertSee('data-cached="no"', escape: false)
+        ->assertSee('data-has-context="no"', escape: false)
+        ->assertSee('&quot;checkpoint&quot;: &quot;english&quot;', escape: false);
+    // The text is on the page above the events, but not inside the events panel.
+    expect(Str::after((string) $response->getContent(), 'id="events"'))->not->toContain('Jane Doe');
+});
+
+it('shows the context in the event with ?include_context=1', function (): void {
+    Http::fake(['*' => Http::response(['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.7]]])]);
+
+    $response = $this->get('/decide?include_context=1&text='.urlencode('Jane Doe will cancel.'))->assertOk();
+
+    $response->assertSee('data-has-context="yes"', escape: false);
+    expect(Str::after((string) $response->getContent(), 'id="events"'))->toContain('Jane Doe will cancel.');
+});
+
+it('shows the DecisionFailed event with the exception type', function (): void {
+    Http::fake(['*' => Http::response(['detail' => 'no'], 422)]);
+
+    $this->get('/decide')
+        ->assertStatus(502)
+        ->assertSee('data-event="DecisionFailed"', escape: false)
+        ->assertSee('data-exception="RejectedByModel"', escape: false);
+});
+
+it('answers a repeated decision from the cache with ?cache=1, and misses when a control changes', function (): void {
+    config(['system-one.cache.store' => 'array']);
+    Http::fake([
+        '*/health' => Http::response(['revisions' => ['english' => 'rev-a']]),
+        '*/v1/systemone' => Http::response(['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.7]], 'routing' => ['model' => 'english']]),
+    ]);
+    $posts = fn (): int => Http::recorded(fn (Request $request): bool => str_ends_with($request->url(), '/v1/systemone'))->count();
+
+    $this->get('/decide?cache=1')->assertOk()->assertSee('data-cached="no"', escape: false)->assertSee('data-cache="on"', escape: false);
+    $this->get('/decide?cache=1')->assertOk()->assertSee('data-cached="yes"', escape: false);
+    expect($posts())->toBe(1);
+
+    $this->get('/decide?cache=1&min_confidence=0.5')->assertOk()->assertSee('data-cached="no"', escape: false);
+    expect($posts())->toBe(2);
+});
+
+it('lists only the events of its own request, with one listener however many requests the app serves', function (): void {
+    Http::fake(['*' => Http::response(['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.7]]])]);
+
+    $this->get('/decide');
+    $this->get('/decide');
+    $page = (string) $this->get('/decide')->getContent();
+
+    expect(substr_count($page, 'data-event="DecisionMade"'))->toBe(1)
+        ->and(Event::getListeners(DecisionMade::class))->toHaveCount(1);
+});
+
+it('leaves caching off without ?cache=1', function (): void {
+    Http::fake(['*' => Http::response(['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.7]]])]);
+
+    $this->get('/decide')->assertOk()->assertSee('data-cache="off"', escape: false);
+    $this->get('/decide')->assertOk()->assertDontSee('data-cached="yes"', escape: false);
+
+    Http::assertSentCount(2);
+});

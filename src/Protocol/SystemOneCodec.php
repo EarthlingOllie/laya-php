@@ -18,9 +18,11 @@ use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Meta;
 use EarthlingOllie\SystemOneClassification\Result\Result;
 use EarthlingOllie\SystemOneClassification\Transport\Response;
+use stdClass;
 
 use function array_filter;
 use function array_is_list;
+use function get_object_vars;
 use function is_array;
 use function is_bool;
 use function is_float;
@@ -28,6 +30,7 @@ use function is_int;
 use function is_string;
 use function json_decode;
 use function json_encode;
+use function ksort;
 
 /**
  * Maps a Decision to the System One wire format (`POST /v1/systemone`, shared by laya-serve
@@ -39,12 +42,16 @@ final readonly class SystemOneCodec
 {
     public const string PATH = '/v1/systemone';
 
+    /** Where laya-serve reports its loaded checkpoints and their revisions. */
+    public const string HEALTH_PATH = '/health';
+
     /**
-     * @return array<string, mixed> `state`, the request controls that are set, then `questions`
+     * @param  ?string  $model  the checkpoint or model to ask (`model`); null lets the server route
+     * @return array<string, mixed> `state`, the model if given, the request controls that are set, then `questions`
      *
      * @throws InvalidDecision
      */
-    public function encode(Decision $decision): array
+    public function encode(Decision $decision, ?string $model = null): array
     {
         $questions = [];
 
@@ -56,7 +63,9 @@ final readonly class SystemOneCodec
             throw InvalidDecision::noQuestions();
         }
 
-        return ['state' => $decision->context->state, ...self::controls($decision), 'questions' => $questions];
+        $model = $model === null ? [] : ['model' => $model];
+
+        return ['state' => $decision->context->state, ...$model, ...self::controls($decision), 'questions' => $questions];
     }
 
     /**
@@ -69,25 +78,7 @@ final readonly class SystemOneCodec
      */
     public function decode(Decision $decision, Response $response, ?float $latencyMs = null): Result
     {
-        $body = json_decode($response->body, true);
-        $status = $response->status;
-
-        if ($status >= 500) {
-            throw HostUnavailable::serverError($status, self::detail($body));
-        }
-
-        if ($status >= 400) {
-            throw RejectedByModel::withStatus($status, self::detail($body));
-        }
-
-        if ($status < 200 || $status >= 300) {
-            throw MalformedResponse::because("Unexpected HTTP status {$status}.", $response->body);
-        }
-
-        if (! is_array($body) || array_is_list($body)) {
-            throw MalformedResponse::because('The response is not a JSON object.', $response->body);
-        }
-
+        $body = self::object($response, 'response');
         $answers = $body['answers'] ?? null;
 
         if (! is_array($answers) || array_is_list($answers)) {
@@ -107,6 +98,96 @@ final readonly class SystemOneCodec
         }
 
         return new Result($decoded, self::decodeMeta($body, $response->body, $latencyMs));
+    }
+
+    /**
+     * The checkpoint revisions a `GET /health` response reports (laya-serve's `revisions`), keyed
+     * and ordered by checkpoint name. A checkpoint loaded without a known revision (from a local
+     * path, say) reads as null, and a server with nothing loaded yet reports none.
+     *
+     * @return array<array-key, ?string> a checkpoint named like a whole number gets an int key, as in any PHP array
+     *
+     * @throws HostUnavailable on a 5xx
+     * @throws RejectedByModel on a 4xx, such as a host with no /health
+     * @throws MalformedResponse when the body has no `revisions` object of strings or nulls
+     */
+    public function decodeRevisions(Response $response): array
+    {
+        self::failOnStatus($response);
+
+        // Decoded to objects, not arrays: `{"0": "abc"}` must stay an object, not become a list.
+        $root = json_decode($response->body);
+
+        if (! $root instanceof stdClass) {
+            throw MalformedResponse::because('The health response is not a JSON object.', $response->body);
+        }
+
+        $revisions = $root->revisions ?? null;
+
+        if (! $revisions instanceof stdClass) {
+            throw MalformedResponse::because("The health response has no 'revisions' object.", $response->body);
+        }
+
+        $decoded = [];
+
+        foreach (get_object_vars($revisions) as $checkpoint => $revision) {
+            if ($revision !== null && ! is_string($revision)) {
+                throw MalformedResponse::because("The health response's revision for '{$checkpoint}' is not a string.", $response->body);
+            }
+
+            $decoded[$checkpoint] = $revision;
+        }
+
+        ksort($decoded, SORT_STRING);
+
+        return $decoded;
+    }
+
+    /**
+     * The JSON object of a successful response; an error status raises its typed exception.
+     *
+     * @param  string  $name  what the response is, for the error message
+     * @return array<mixed>
+     *
+     * @throws HostUnavailable
+     * @throws RejectedByModel
+     * @throws MalformedResponse
+     */
+    private static function object(Response $response, string $name): array
+    {
+        self::failOnStatus($response);
+        $body = json_decode($response->body, true);
+
+        if (! is_array($body) || array_is_list($body)) {
+            throw MalformedResponse::because("The {$name} is not a JSON object.", $response->body);
+        }
+
+        return $body;
+    }
+
+    /**
+     * Raises the typed exception for any status but a 2xx.
+     *
+     * @throws HostUnavailable
+     * @throws RejectedByModel
+     * @throws MalformedResponse
+     */
+    private static function failOnStatus(Response $response): void
+    {
+        $body = json_decode($response->body, true);
+        $status = $response->status;
+
+        if ($status >= 500) {
+            throw HostUnavailable::serverError($status, self::detail($body));
+        }
+
+        if ($status >= 400) {
+            throw RejectedByModel::withStatus($status, self::detail($body));
+        }
+
+        if ($status < 200 || $status >= 300) {
+            throw MalformedResponse::because("Unexpected HTTP status {$status}.", $response->body);
+        }
     }
 
     /**

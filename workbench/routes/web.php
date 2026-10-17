@@ -10,11 +10,14 @@ use EarthlingOllie\SystemOneClassification\Exceptions\InvalidDecision;
 use EarthlingOllie\SystemOneClassification\Exceptions\MalformedResponse;
 use EarthlingOllie\SystemOneClassification\Exceptions\RejectedByModel;
 use EarthlingOllie\SystemOneClassification\Exceptions\SystemOneException;
+use EarthlingOllie\SystemOneClassification\Laravel\Events\DecisionFailed;
+use EarthlingOllie\SystemOneClassification\Laravel\Events\DecisionMade;
 use EarthlingOllie\SystemOneClassification\Laravel\Facades\SystemOne;
 use EarthlingOllie\SystemOneClassification\Laravel\SystemOneServiceProvider;
 use Illuminate\Foundation\Application;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -59,6 +62,18 @@ Route::get('/', function (Application $app): string {
  * use another server or a key, add SYSTEM_ONE_URL / SYSTEM_ONE_API_KEY to the `env:`
  * list in testbench.yaml.
  */
+/*
+ * The decide page lists the events its decision dispatched. One listener, registered once
+ * when the routes load, keeps them on the current request, so a long-lived app (Octane, a
+ * test making several requests) neither piles up listeners nor mixes requests' events.
+ */
+
+Event::listen([DecisionMade::class, DecisionFailed::class], function (DecisionMade|DecisionFailed $event): void {
+    $attributes = request()->attributes;
+    $seen = $attributes->get('workbench.system-one-events');
+    $attributes->set('workbench.system-one-events', [...(is_array($seen) ? $seen : []), $event]);
+});
+
 Route::get('/decide', function (Request $request): Response {
     // A query string can make ?text= an array (?text[]=x), and Context::text() refuses blank
     // text: anything but a non-blank string gets the default ticket.
@@ -71,6 +86,16 @@ Route::get('/decide', function (Request $request): Response {
     $minConfidence = is_string($minConfidence) && is_numeric($minConfidence) ? (float) $minConfidence : null;
     $churn = Question::yesNo('churn', 'Does the customer threaten to cancel or leave?');
     $status = 200;
+
+    // ?cache=1 turns the result cache on for this request (the `file` store unless
+    // SYSTEM_ONE_CACHE_STORE names one), ?include_context=1 puts the text in the events.
+    $cache = $request->query('cache') === '1';
+    if ($cache) {
+        config(['system-one.cache' => ['enabled' => true, 'store' => config('system-one.cache.store') ?? 'file', 'ttl' => 300]]);
+    }
+    if ($request->query('include_context') === '1') {
+        config(['system-one.events.include_context' => true]);
+    }
 
     try {
         $decision = Decision::about(Context::text($text))->ask($churn);
@@ -131,6 +156,31 @@ Route::get('/decide', function (Request $request): Response {
 
     $quoted = e($text);
     $question = e($churn->instructions);
+    $cacheState = $cache ? 'on' : 'off';
+    $dispatched = '';
+    $events = $request->attributes->get('workbench.system-one-events');
+    foreach (is_array($events) ? $events : [] as $event) {
+        if (! $event instanceof DecisionMade && ! $event instanceof DecisionFailed) {
+            continue;
+        }
+        $name = e(class_basename($event));
+        $connection = e($event->connection);
+        $keys = e(implode(',', $event->questionKeys));
+        $hasContext = $event->context === null ? 'no' : 'yes';
+        $extra = $event instanceof DecisionMade
+            ? 'data-cached="'.($event->cached ? 'yes' : 'no').'"'
+            : 'data-exception="'.e(class_basename($event->exception)).'"';
+        // What a listener receives, minus the result's answers (shown above): the event's own fields.
+        $fields = $event instanceof DecisionMade
+            ? ['connection' => $event->connection, 'model' => $event->model, 'questionKeys' => $event->questionKeys, 'meta' => $event->meta, 'latencyMs' => $event->latencyMs, 'cached' => $event->cached, 'context' => $event->context]
+            : ['connection' => $event->connection, 'model' => $event->model, 'questionKeys' => $event->questionKeys, 'exception' => [class_basename($event->exception) => $event->exception->getMessage()], 'context' => $event->context];
+        $json = e((string) json_encode($fields, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION));
+        $dispatched .= <<<HTML
+            <li data-event="{$name}" data-connection="{$connection}" data-question-keys="{$keys}" data-has-context="{$hasContext}" {$extra}>
+                <strong>{$name}</strong><pre>{$json}</pre>
+            </li>
+            HTML;
+    }
 
     return new Response(<<<HTML
         <!doctype html>
@@ -141,6 +191,9 @@ Route::get('/decide', function (Request $request): Response {
             <p><strong>Text:</strong> {$quoted}</p>
             <p><strong>Question:</strong> {$question}</p>
             {$outcome}
+            <h2>Events dispatched</h2>
+            <p id="cache" data-cache="{$cacheState}">Result cache: <strong>{$cacheState}</strong> (<code>?cache=1</code>)</p>
+            <ol id="events">{$dispatched}</ol>
         </body>
         </html>
         HTML, $status);

@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace EarthlingOllie\SystemOneClassification\Transport;
 
+use Closure;
 use EarthlingOllie\SystemOneClassification\Exceptions\HostUnavailable;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\Response as HttpResponse;
 
-/** POSTs JSON to one System One host (laya-serve, hosted Laya or Jev) with Laravel's HTTP client. */
+/** Sends JSON requests to one System One host (laya-serve, hosted Laya or Jev) with Laravel's HTTP client. */
 final readonly class HttpTransport implements Transport
 {
     public function __construct(
@@ -20,10 +23,24 @@ final readonly class HttpTransport implements Transport
 
     public function post(string $path, array $body): Response
     {
+        return $this->send(static fn (PendingRequest $request): HttpResponse => $request->asJson()->post($path, $body));
+    }
+
+    public function get(string $path): Response
+    {
+        return $this->send(static fn (PendingRequest $request): HttpResponse => $request->get($path));
+    }
+
+    /**
+     * @param  Closure(PendingRequest): HttpResponse  $send
+     *
+     * @throws HostUnavailable
+     */
+    private function send(Closure $send): Response
+    {
         $request = $this->http->createPendingRequest()
             ->baseUrl($this->baseUrl)
             ->acceptJson()
-            ->asJson()
             ->timeout($this->timeout);
 
         if ($this->apiKey !== null && $this->apiKey !== '') {
@@ -31,7 +48,7 @@ final readonly class HttpTransport implements Transport
         }
 
         try {
-            $response = $request->post($path, $body);
+            $response = $send($request);
         } catch (ConnectionException $exception) {
             $redactor = Redactor::forConnection($this->baseUrl, $this->apiKey);
 
