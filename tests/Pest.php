@@ -16,10 +16,16 @@ use EarthlingOllie\SystemOneClassification\Tests\TestCase;
 | grouped as `integration`, are not part of the default suite (see
 | phpunit.xml.dist), and skip themselves when no server is reachable,
 | unless CI or SYSTEM_ONE_REQUIRE_SERVER=1 is set: then they fail.
+| Smoke tests reach the real hosted Laya and Jev APIs; they are not in the
+| default suite either, and each skips unless its host's key is set
+| (Tests\Support\RemoteHost).
 |
 */
 
 pest()->extend(TestCase::class)->in('Feature');
+
+// The opt-in Smoke suite (tests/Smoke) boots Laravel too, and is grouped so it can be told apart.
+pest()->extend(TestCase::class)->group('smoke')->in('Smoke');
 
 pest()->group('integration')
     ->beforeEach(function (): void {

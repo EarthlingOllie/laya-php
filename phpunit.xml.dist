@@ -35,6 +35,10 @@
         <testsuite name="Integration">
             <directory suffix="Test.php">tests/Integration</directory>
         </testsuite>
+        <!-- Real hosted Laya and Jev, billed per call; each test skips without its key. Never in the default suite or CI: `composer test:smoke`, or the manual smoke workflow. -->
+        <testsuite name="Smoke">
+            <directory suffix="Test.php">tests/Smoke</directory>
+        </testsuite>
     </testsuites>
     <source>
         <include>

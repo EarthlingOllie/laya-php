@@ -17,6 +17,7 @@
     },
     "require-dev": {
         "infection/infection": "^0.35.8",
+        "justinrainbow/json-schema": "^6.13",
         "larastan/larastan": "^3.13",
         "laravel/pint": "^1.32",
         "orchestra/testbench": "^11.3",
@@ -80,7 +81,8 @@
             "@php vendor/bin/pest --path-coverage --coverage-php=build/coverage/coverage.cov --coverage-clover=build/coverage/clover.xml",
             "@php tools/check-coverage.php build/coverage/coverage.cov"
         ],
-        "test:integration": "@php vendor/bin/pest --testsuite=Integration"
+        "test:integration": "@php vendor/bin/pest --testsuite=Integration",
+        "test:smoke": "@php vendor/bin/pest --testsuite=Smoke"
     },
     "scripts-descriptions": {
         "analyse": "PHPStan at max level with strict rules, including the assertType() files in tests/Types.",
@@ -93,7 +95,8 @@
         "serve": "Serve the workbench app (testbench.yaml) with the package auto-discovered; set SERVER_PORT/SERVER_HOST to change the address.",
         "test": "Unit, Contract, Feature and Arch suites.",
         "test:coverage": "Tests with Xdebug path coverage; fails below 100% of lines or branches of src/.",
-        "test:integration": "Integration suite against a running Laya server."
+        "test:integration": "Integration suite against a running Laya server.",
+        "test:smoke": "Smoke suite against the real laya-hosted and jev APIs; each test skips unless SYSTEM_ONE_LAYA_HOSTED_API_KEY / SYSTEM_ONE_JEV_API_KEY is set. Billed by the hosts."
     },
     "config": {
         "process-timeout": 0,

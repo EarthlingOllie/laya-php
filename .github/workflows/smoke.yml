@@ -1,0 +1,48 @@
+# Opt-in smoke tests against the real remote hosts: hosted Laya (laya-ai.com) and TypeSafe's
+# Jev. Every call is billed by the host, so this never runs on a push or a pull request: start
+# it by hand (Actions > Smoke (remote hosts) > Run workflow). It needs the repository secrets
+# SYSTEM_ONE_LAYA_HOSTED_API_KEY and/or SYSTEM_ONE_JEV_API_KEY; a host chosen here whose key is
+# missing fails the run (SYSTEM_ONE_REQUIRE_SMOKE) rather than skipping it.
+name: Smoke (remote hosts)
+
+on:
+  workflow_dispatch:
+    inputs:
+      hosts:
+        description: Which remote hosts to reach
+        type: choice
+        options:
+          - laya-hosted,jev
+          - laya-hosted
+          - jev
+        default: laya-hosted,jev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Smoke (${{ inputs.hosts }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SYSTEM_ONE_REQUIRE_SMOKE: ${{ inputs.hosts }}
+      # Only the chosen hosts get a key; the other's tests then skip.
+      SYSTEM_ONE_LAYA_HOSTED_API_KEY: ${{ contains(inputs.hosts, 'laya-hosted') && secrets.SYSTEM_ONE_LAYA_HOSTED_API_KEY || '' }}
+      SYSTEM_ONE_JEV_API_KEY: ${{ contains(inputs.hosts, 'jev') && secrets.SYSTEM_ONE_JEV_API_KEY || '' }}
+      # Optional repository variables, for a host whose URL or model names differ from the defaults.
+      SYSTEM_ONE_LAYA_HOSTED_URL: ${{ vars.SYSTEM_ONE_LAYA_HOSTED_URL || 'https://api.laya-ai.com' }}
+      SYSTEM_ONE_JEV_URL: ${{ vars.SYSTEM_ONE_JEV_URL || 'https://api.typesafe.ai' }}
+      SYSTEM_ONE_JEV_MODEL: ${{ vars.SYSTEM_ONE_JEV_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+      - uses: ramsey/composer-install@v3
+      - run: composer test:smoke

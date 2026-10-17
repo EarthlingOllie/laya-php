@@ -11,8 +11,14 @@ namespace EarthlingOllie\SystemOneClassification\Transport;
  */
 final readonly class Response
 {
+    /**
+     * @param  int  $attempts  how many requests it took, retries included
+     * @param  ?int  $retryAfter  the seconds a Retry-After header asked to wait, if it gave a number
+     */
     public function __construct(
         public int $status,
         public string $body,
+        public int $attempts = 1,
+        public ?int $retryAfter = null,
     ) {}
 }

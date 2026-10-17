@@ -26,15 +26,20 @@ final class HostUnavailable extends RuntimeException implements SystemOneExcepti
      * message can hold the request URL with its query string (Guzzle 7 masks only the userinfo),
      * `(string) $e` and Laravel's log formatter print the whole previous chain, and Guzzle's
      * exception carries the request, Authorization header included. Its useful part, the
-     * connection error, is in $reason.
+     * connection error, is in $reason: that of the last of $attempts.
      */
-    public static function unreachable(string $url, string $reason): self
+    public static function unreachable(string $url, string $reason, int $attempts): self
     {
-        return new self("The model server at {$url} could not be reached: {$reason}");
+        $tries = $attempts > 1 ? " after {$attempts} attempts" : '';
+
+        return new self("The model server at {$url} could not be reached{$tries}: {$reason}");
     }
 
-    public static function serverError(int $status, ?string $detail): self
+    /** @param  int  $attempts  how many requests got a 5xx, retries included */
+    public static function serverError(int $status, ?string $detail, int $attempts): self
     {
-        return new self("The model server is unavailable (HTTP {$status})".($detail === null ? '.' : ": {$detail}"), $status);
+        $tries = $attempts > 1 ? " after {$attempts} attempts" : '';
+
+        return new self("The model server is unavailable (HTTP {$status}{$tries})".($detail === null ? '.' : ": {$detail}"), $status);
     }
 }

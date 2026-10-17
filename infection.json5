@@ -16,7 +16,12 @@
         "summary": "build/infection/summary.log"
     },
     "mutators": {
-        "@default": true
+        "@default": true,
+        // Equivalent mutant: Factory's constructor sets only what QuietHttpFactory replaces
+        // (see its constructor). PHPStan requires the call, so it stays.
+        "MethodCallRemoval": {
+            "ignore": ["EarthlingOllie\\SystemOneClassification\\Laravel\\QuietHttpFactory::__construct"]
+        }
     },
     // Run with --with-uncovered (see `composer mutate`) so that uncovered code counts
     // against the MSI instead of being skipped.

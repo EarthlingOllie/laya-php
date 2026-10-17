@@ -53,6 +53,24 @@ it('sends the pinned model, and no model field when none is pinned', function ()
     ])->and((new SystemOneCodec)->encode(churnDecision()))->not->toHaveKey('model');
 });
 
+it("sends the connection's default model when the decision pins none", function (): void {
+    expect((new SystemOneCodec)->encode(churnDecision(), 'multilingual'))->toBe([
+        'state' => 'We will cancel.',
+        'model' => 'multilingual',
+        'questions' => ['churn' => ['type' => 'noul', 'instructions' => 'Does the customer threaten to cancel?']],
+    ]);
+});
+
+it("lets the decision's pinned model win over the connection's default", function (): void {
+    expect((new SystemOneCodec)->encode(churnDecision()->withModel('english'), 'multilingual')['model'])->toBe('english');
+});
+
+it('holds the default model to the profile, as a pinned one', function (): void {
+    expect(fn () => (new SystemOneCodec(new JevProfile))->encode(churnDecision(), 'jev-1'))
+        ->toThrow(InvalidDecision::class, "The decision pins model 'jev-1', but the jev profile accepts no model values")
+        ->and((new SystemOneCodec(new JevProfile(['jev-1'])))->encode(churnDecision(), 'jev-1')['model'])->toBe('jev-1');
+});
+
 // JSON carries only UTF-8: such text would fail in the HTTP client's json_encode() instead.
 it('refuses context text that is not valid UTF-8', function (): void {
     $decision = Decision::about(Context::text("Billed tw\xB1ce"))->ask(Question::yesNo('churn', 'Cancel?'));
@@ -125,6 +143,14 @@ it('keeps the 5xx status and detail', function (): void {
     }
 });
 
+it('names the attempts of a 5xx that persisted through retries', function (int $attempts, string $message): void {
+    expect(fn () => (new SystemOneCodec)->decode(churnDecision(), new Response(503, '{"detail":"server busy"}', attempts: $attempts)))
+        ->toThrow(HostUnavailable::class, $message);
+})->with([
+    [1, 'The model server is unavailable (HTTP 503): server busy'],
+    [2, 'The model server is unavailable (HTTP 503 after 2 attempts): server busy'],
+]);
+
 it('reports a 5xx without a JSON detail by its status alone', function (string $body): void {
     (new SystemOneCodec)->decode(churnDecision(), new Response(502, $body));
 })->with(['<html>Bad Gateway</html>', '{"detail": 7}', '[]'])
@@ -134,12 +160,81 @@ it('raises RejectedByModel for a 4xx', function (int $status): void {
     (new SystemOneCodec)->decode(churnDecision(), new Response($status, '{"detail":"nope"}'));
 })->with([400, 404, 499])->throws(RejectedByModel::class, 'nope');
 
-it('reports a 4xx without a JSON detail by its status alone', function (): void {
+it('reports a 4xx without a readable message by its status alone', function (string $body): void {
     try {
-        (new SystemOneCodec)->decode(churnDecision(), new Response(404, 'Not Found'));
+        (new SystemOneCodec)->decode(churnDecision(), new Response(404, $body));
+        test()->fail('Expected RejectedByModel.');
     } catch (RejectedByModel $rejected) {
         expect($rejected->getMessage())->toBe('The model server rejected the decision (HTTP 404).')
             ->and($rejected->detail)->toBeNull();
+    }
+})->with([
+    'empty' => [''],
+    'blank' => ["  \n "],
+    'an HTML page' => ['<!doctype html><title>404</title>'],
+    'HTML after whitespace' => ["\n  <html>Not Found</html>"],
+    'a detail that is not text' => ['{"detail": 7}'],
+    'a blank detail' => ['{"detail": " "}'],
+    'an empty list of errors' => ['{"detail": []}'],
+    'errors without a msg' => ['{"detail": [{"loc": ["body"]}, "x", {"msg": 3}]}'],
+    'a JSON list' => ['[]'],
+    'a JSON number' => ['404'],
+    'a blank JSON string' => ['" "'],
+    'an error object without a message' => ['{"error": {"code": 7}}'],
+]);
+
+it('carries the server message whatever shape the error body takes', function (string $body, string $detail): void {
+    try {
+        (new SystemOneCodec)->decode(churnDecision(), new Response(401, $body));
+        test()->fail('Expected RejectedByModel.');
+    } catch (RejectedByModel $rejected) {
+        expect($rejected->detail)->toBe($detail)
+            ->and($rejected->getMessage())->toBe("The model server rejected the decision (HTTP 401): {$detail}");
+    }
+})->with([
+    'laya-serve and Jev: detail' => ['{"detail":"invalid or missing bearer token"}', 'invalid or missing bearer token'],
+    'a gateway: message' => ['{"message":"Unauthorized"}', 'Unauthorized'],
+    'error as text' => ['{"error":"invalid_api_key"}', 'invalid_api_key'],
+    'error as an object' => ['{"error":{"type":"auth","message":"Incorrect API key provided."}}', 'Incorrect API key provided.'],
+    'detail wins over message' => ['{"message":"second","detail":"first"}', 'first'],
+    'message wins over error' => ['{"error":"second","message":"first"}', 'first'],
+    'trimmed' => ['{"detail":"  spaced  "}', 'spaced'],
+    'plain text' => ["Unauthorized\n", 'Unauthorized'],
+    // Review finding: a JSON string body is plain text too.
+    'a JSON string' => ['"Rate limit exceeded"', 'Rate limit exceeded'],
+    'plain text, its whitespace collapsed' => ["Bad\n\n  key", 'Bad key'],
+]);
+
+it('cuts a plain-text message to 200 characters, counting characters, not bytes', function (string $body, string $detail): void {
+    try {
+        (new SystemOneCodec)->decode(churnDecision(), new Response(400, $body));
+        test()->fail('Expected RejectedByModel.');
+    } catch (RejectedByModel $rejected) {
+        expect($rejected->detail)->toBe($detail);
+    }
+})->with([
+    'longer' => ['a'.str_repeat('é', 200), 'a'.str_repeat('é', 199).'…'],
+    'exactly 200' => [str_repeat('é', 200), str_repeat('é', 200)],
+]);
+
+it('gives the reason of a FastAPI validation error, without the input it echoes', function (): void {
+    $body = json_encode(['detail' => [
+        ['type' => 'no message', 'loc' => ['body']],
+        ['type' => 'missing', 'loc' => ['body', 'state'], 'msg' => 'Field required', 'input' => ['questions' => 'the customer text']],
+        ['type' => 'float_type', 'loc' => ['body', 'min_confidence'], 'msg' => 'Input should be a valid number', 'input' => 'private'],
+        ['type' => 'x', 'loc' => [], 'msg' => 'No location'],
+        ['type' => 'y', 'loc' => ['body', 'questions', 0, 7.5, true], 'msg' => 'Odd location'],
+        ['type' => 'z', 'msg' => 'Location left out'],
+        ['type' => 'w', 'loc' => 'body', 'msg' => 'Location not a list'],
+    ]], JSON_THROW_ON_ERROR);
+
+    try {
+        (new SystemOneCodec)->decode(churnDecision(), new Response(422, $body));
+        test()->fail('Expected RejectedByModel.');
+    } catch (RejectedByModel $rejected) {
+        expect($rejected->status)->toBe(422)
+            ->and($rejected->detail)->toBe('body.state: Field required; body.min_confidence: Input should be a valid number; No location; body.questions.0: Odd location; Location left out; Location not a list')
+            ->and($rejected->getMessage())->not->toContain('the customer text')->not->toContain('private');
     }
 });
 

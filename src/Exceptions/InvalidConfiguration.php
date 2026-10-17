@@ -48,4 +48,35 @@ final class InvalidConfiguration extends InvalidArgumentException implements Sys
     {
         return new self("System One connection '{$name}' has 'models' that are not a list of model names.");
     }
+
+    public static function modelNotString(string $name): self
+    {
+        return new self("System One connection '{$name}' has a 'model' that is not a string.");
+    }
+
+    /** @param  string  $key  'retries' or 'retry_delay' */
+    public static function invalidRetry(string $name, string $key): self
+    {
+        return new self("System One connection '{$name}' has a '{$key}' that is not a whole number of zero or more.");
+    }
+
+    public static function tooManyRetries(string $name, int $max): self
+    {
+        return new self("System One connection '{$name}' has 'retries' above {$max}.");
+    }
+
+    public static function invalidRemote(string $name): self
+    {
+        return new self("System One connection '{$name}' has a 'remote' that is not true or false.");
+    }
+
+    public static function missingApiKey(string $name): self
+    {
+        return new self("System One connection '{$name}' is a remote host, so it needs an 'api_key'; nothing is sent to it without one.");
+    }
+
+    public static function insecureRemoteUrl(string $name): self
+    {
+        return new self("System One connection '{$name}' is a remote host, so its 'url' must use https (plain http is allowed only to localhost).");
+    }
 }

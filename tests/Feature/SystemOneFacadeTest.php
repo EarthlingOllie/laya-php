@@ -156,7 +156,12 @@ it('raises HostUnavailable when the server is down', function (): void {
 it('raises HostUnavailable for a 5xx and MalformedResponse for an unexpected body', function (): void {
     $decision = Decision::about(Context::text('x'))->ask(churnQuestion());
 
-    Http::fake(['*' => Http::sequence()->push(['detail' => 'inference failed'], 500)->push('<html>', 200)]);
+    // The local connection tries twice more before giving up on a 5xx.
+    Http::fake(['*' => Http::sequence()
+        ->push(['detail' => 'inference failed'], 500)
+        ->push(['detail' => 'inference failed'], 500)
+        ->push(['detail' => 'inference failed'], 500)
+        ->push('<html>', 200)]);
 
     expect(fn () => SystemOne::decide($decision))->toThrow(HostUnavailable::class, 'inference failed')
         ->and(fn () => SystemOne::decide($decision))->toThrow(MalformedResponse::class);

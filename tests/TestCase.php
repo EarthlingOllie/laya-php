@@ -7,6 +7,7 @@ namespace EarthlingOllie\SystemOneClassification\Tests;
 use EarthlingOllie\SystemOneClassification\Tests\Support\ComposerManifest;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Sleep;
 use Orchestra\Testbench\TestCase as Orchestra;
 
 /**
@@ -17,6 +18,17 @@ use Orchestra\Testbench\TestCase as Orchestra;
  */
 abstract class TestCase extends Orchestra
 {
+    /**
+     * Retries wait through Illuminate\Support\Sleep (Laravel\LaravelSleeper), faked here so no
+     * Feature test really waits and any can assert the backoff with Sleep::assertSequence().
+     */
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Sleep::fake();
+    }
+
     /**
      * @param  Application  $app
      * @return list<class-string<ServiceProvider>>

@@ -73,3 +73,66 @@ it('masks the whole text when a pattern cannot run', function (): void {
         ini_set('pcre.backtrack_limit', (string) $limit);
     }
 });
+
+it('masks the whole body when a pattern cannot run', function (string $body, string $redacted): void {
+    $jit = ini_get('pcre.jit');
+    $limit = ini_get('pcre.backtrack_limit');
+    ini_set('pcre.jit', '0');
+    ini_set('pcre.backtrack_limit', '1');
+
+    try {
+        expect((new Redactor)->redactBody($body))->toBe($redacted);
+    } finally {
+        ini_set('pcre.jit', (string) $jit);
+        ini_set('pcre.backtrack_limit', (string) $limit);
+    }
+})->with([
+    'json' => ['{"detail":"see http://user:secret@laya.test/?api_key=k"}', '{"detail":"***"}'],
+    'text' => ['see http://user:secret@laya.test/?api_key=k', '***'],
+]);
+
+it('masks the connection secrets and URL credentials in every string of a JSON body, keeping it JSON', function (): void {
+    $body = '{"detail":"bad key sk-1 at http://u:p@laya.test/?sig=abc","errors":[{"msg":"sk-1 token=t0k","loc":["body",0]}],"n":1.0,"ok":false,"none":null,"empty":{},"list":[]}';
+
+    expect(Redactor::forConnection('http://laya.test', 'sk-1')->redactBody($body))
+        ->toBe('{"detail":"bad key *** at http://***@laya.test/?sig=***","errors":[{"msg":"*** token=t0k","loc":["body",0]}],"n":1.0,"ok":false,"none":null,"empty":{},"list":[]}');
+});
+
+// Found by the named-connection tests: laya-serve's own 401 says "invalid or missing bearer
+// token", and the bearer pattern meant for HTTP client errors turned it into "bearer ***".
+it("leaves the wording of a server's message alone: only what was sent is masked", function (string $body): void {
+    expect(Redactor::forConnection('http://laya.test', 'sk-1')->redactBody($body))->toBe($body);
+})->with([
+    'json' => ['{"detail":"invalid or missing bearer token"}'],
+    'text' => ['Bearer token required; password=, api_key=?'],
+]);
+
+it('keeps slashes and non-ASCII text in a JSON body as they were', function (): void {
+    expect((new Redactor('k'))->redactBody('{"detail":"Schlüssel k für /v1/systemone"}'))
+        ->toBe('{"detail":"Schlüssel *** für /v1/systemone"}');
+});
+
+it('keeps the body JSON when masking a key splits a character of the text', function (): void {
+    // The key is one byte of "é": masking it leaves invalid UTF-8, substituted, not an error.
+    expect((new Redactor("\xA9"))->redactBody('{"detail":"café"}'))->toBe("{\"detail\":\"caf\u{FFFD}***\"}");
+});
+
+it('masks every string of a body that is a JSON list', function (): void {
+    expect((new Redactor('k3y'))->redactBody('["k3y", {"detail": "no k3y"}, [], 1]'))->toBe('["***",{"detail":"no ***"},[],1]');
+});
+
+it('masks a JSON string body and leaves other JSON scalars alone', function (string $body, string $redacted): void {
+    expect((new Redactor('k3y'))->redactBody($body))->toBe($redacted);
+})->with([
+    ['"no k3y"', '"no ***"'],
+    ['42', '42'],
+    ['null', 'null'],
+]);
+
+it('masks a body that is not JSON as text', function (string $body, string $redacted): void {
+    expect((new Redactor('k3y'))->redactBody($body))->toBe($redacted);
+})->with([
+    ['<html>Unauthorized: k3y</html>', '<html>Unauthorized: ***</html>'],
+    ['{"detail": "k3y"', '{"detail": "***"'],
+    ['', ''],
+]);

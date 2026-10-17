@@ -30,6 +30,28 @@ it('sends the encoded decision through the transport and decodes the answer', fu
         && $request->data() === (new SystemOneCodec)->encode($decision));
 });
 
+it("sends its connection's default model with a decision that pins none, and the pin otherwise", function (): void {
+    $churn = Question::yesNo('churn', 'Does the customer threaten to cancel?');
+    $http = new Factory;
+    $http->fake(['*' => Factory::response(['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.5]]])]);
+    $client = new DecisionClient(new HttpTransport($http, 'http://laya.test'), new SystemOneCodec, model: 'multilingual');
+
+    $client->decide(Decision::about(Context::text('x'))->ask($churn));
+    $client->decide(Decision::about(Context::text('x'))->ask($churn)->withModel('english'));
+
+    expect($http->recorded()->map(fn (array $sent): mixed => $sent[0]->data()['model'] ?? null)->all())->toBe(['multilingual', 'english']);
+});
+
+it('sends no model when neither the decision nor its connection names one', function (): void {
+    $http = new Factory;
+    $http->fake(['*' => Factory::response(['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.5]]])]);
+
+    (new DecisionClient(new HttpTransport($http, 'http://laya.test'), new SystemOneCodec))
+        ->decide(Decision::about(Context::text('x'))->ask(Question::yesNo('churn', 'Cancel?')));
+
+    $http->assertSent(fn (Request $request): bool => ! array_key_exists('model', $request->data()));
+});
+
 it('raises the codec error for an error response', function (): void {
     $transport = new readonly class implements Transport
     {

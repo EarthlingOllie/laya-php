@@ -46,18 +46,37 @@ it('merges the package config so the default connection is local', function (): 
         ->and(config('system-one.connections.local'))->toBeArray();
 });
 
-it('points the local connection at http://localhost:8000 when SYSTEM_ONE_URL is not set', function (): void {
-    $config = systemOneConfigWith([
-        'SYSTEM_ONE_CONNECTION' => null,
-        'SYSTEM_ONE_URL' => null,
-        'SYSTEM_ONE_API_KEY' => null,
-        'SYSTEM_ONE_TIMEOUT' => null,
-        'SYSTEM_ONE_PROFILE' => null,
-        'SYSTEM_ONE_TOURNAMENT_GROUPING' => null,
-        'SYSTEM_ONE_MODELS' => null,
-    ]);
+/** Every environment variable config/system-one.php reads, unset. */
+const SYSTEM_ONE_ENVIRONMENT = [
+    'SYSTEM_ONE_CONNECTION' => null,
+    'SYSTEM_ONE_URL' => null,
+    'SYSTEM_ONE_API_KEY' => null,
+    'SYSTEM_ONE_TIMEOUT' => null,
+    'SYSTEM_ONE_PROFILE' => null,
+    'SYSTEM_ONE_TOURNAMENT_GROUPING' => null,
+    'SYSTEM_ONE_MODELS' => null,
+    'SYSTEM_ONE_MODEL' => null,
+    'SYSTEM_ONE_RETRIES' => null,
+    'SYSTEM_ONE_RETRY_DELAY' => null,
+    'SYSTEM_ONE_LAYA_HOSTED_URL' => null,
+    'SYSTEM_ONE_LAYA_HOSTED_API_KEY' => null,
+    'SYSTEM_ONE_LAYA_HOSTED_TIMEOUT' => null,
+    'SYSTEM_ONE_LAYA_HOSTED_TOURNAMENT_GROUPING' => null,
+    'SYSTEM_ONE_LAYA_HOSTED_MODELS' => null,
+    'SYSTEM_ONE_LAYA_HOSTED_MODEL' => null,
+    'SYSTEM_ONE_LAYA_HOSTED_RETRIES' => null,
+    'SYSTEM_ONE_LAYA_HOSTED_RETRY_DELAY' => null,
+    'SYSTEM_ONE_JEV_URL' => null,
+    'SYSTEM_ONE_JEV_API_KEY' => null,
+    'SYSTEM_ONE_JEV_TIMEOUT' => null,
+    'SYSTEM_ONE_JEV_MODELS' => null,
+    'SYSTEM_ONE_JEV_MODEL' => null,
+    'SYSTEM_ONE_JEV_RETRIES' => null,
+    'SYSTEM_ONE_JEV_RETRY_DELAY' => null,
+];
 
-    expect($config)->toBe([
+it('ships local, laya-hosted and jev connections, with local the default, when nothing is set', function (): void {
+    expect(systemOneConfigWith(SYSTEM_ONE_ENVIRONMENT))->toBe([
         'default' => 'local',
         'connections' => [
             'local' => [
@@ -67,24 +86,101 @@ it('points the local connection at http://localhost:8000 when SYSTEM_ONE_URL is 
                 'profile' => 'laya',
                 'tournament_grouping' => false,
                 'models' => '',
+                'model' => null,
+                'retries' => 2,
+                'retry_delay' => 200,
+            ],
+            'laya-hosted' => [
+                'remote' => true,
+                'url' => 'https://api.laya-ai.com',
+                'api_key' => null,
+                'timeout' => 30,
+                'profile' => 'laya',
+                'tournament_grouping' => false,
+                'models' => '',
+                'model' => null,
+                'retries' => 2,
+                'retry_delay' => 500,
+            ],
+            'jev' => [
+                'remote' => true,
+                'url' => 'https://api.typesafe.ai',
+                'api_key' => null,
+                'timeout' => 30,
+                'profile' => 'jev',
+                'models' => '',
+                'model' => null,
+                'retries' => 2,
+                'retry_delay' => 500,
             ],
         ],
     ]);
 });
 
-it('takes the local base URL, key and timeout from the environment', function (): void {
+it('takes the local base URL, key, timeout, model and retries from the environment', function (): void {
     $config = systemOneConfigWith([
         'SYSTEM_ONE_URL' => 'http://laya:8000',
         'SYSTEM_ONE_API_KEY' => 'secret',
         'SYSTEM_ONE_TIMEOUT' => '5',
+        'SYSTEM_ONE_MODEL' => 'english',
+        'SYSTEM_ONE_RETRIES' => '4',
+        'SYSTEM_ONE_RETRY_DELAY' => '50',
     ]);
 
-    expect($config['connections'])->toBe([
-        'local' => [
-            'url' => 'http://laya:8000', 'api_key' => 'secret', 'timeout' => '5', 'profile' => 'laya',
-            'tournament_grouping' => false, 'models' => '',
-        ],
+    expect($config['connections']['local'])->toBe([
+        'url' => 'http://laya:8000', 'api_key' => 'secret', 'timeout' => '5', 'profile' => 'laya',
+        'tournament_grouping' => false, 'models' => '', 'model' => 'english', 'retries' => '4', 'retry_delay' => '50',
     ]);
+});
+
+it('takes every laya-hosted setting from the environment', function (): void {
+    $config = systemOneConfigWith([
+        'SYSTEM_ONE_LAYA_HOSTED_URL' => 'https://eu.laya.test',
+        'SYSTEM_ONE_LAYA_HOSTED_API_KEY' => 'lh-key',
+        'SYSTEM_ONE_LAYA_HOSTED_TIMEOUT' => '9',
+        'SYSTEM_ONE_LAYA_HOSTED_TOURNAMENT_GROUPING' => 'true',
+        'SYSTEM_ONE_LAYA_HOSTED_MODELS' => 'laya-rl-agent',
+        'SYSTEM_ONE_LAYA_HOSTED_MODEL' => 'laya-rl-agent',
+        'SYSTEM_ONE_LAYA_HOSTED_RETRIES' => '1',
+        'SYSTEM_ONE_LAYA_HOSTED_RETRY_DELAY' => '1000',
+    ]);
+
+    expect($config['connections']['laya-hosted'])->toBe([
+        'remote' => true, 'url' => 'https://eu.laya.test', 'api_key' => 'lh-key', 'timeout' => '9', 'profile' => 'laya',
+        'tournament_grouping' => true, 'models' => 'laya-rl-agent', 'model' => 'laya-rl-agent', 'retries' => '1', 'retry_delay' => '1000',
+    ]);
+});
+
+it('takes every jev setting from the environment', function (): void {
+    $config = systemOneConfigWith([
+        'SYSTEM_ONE_JEV_URL' => 'https://jev.test',
+        'SYSTEM_ONE_JEV_API_KEY' => 'jev-key',
+        'SYSTEM_ONE_JEV_TIMEOUT' => '7',
+        'SYSTEM_ONE_JEV_MODELS' => 'jev-1,jev-2',
+        'SYSTEM_ONE_JEV_MODEL' => 'jev-2',
+        'SYSTEM_ONE_JEV_RETRIES' => '0',
+        'SYSTEM_ONE_JEV_RETRY_DELAY' => '',
+    ]);
+
+    expect($config['connections']['jev'])->toBe([
+        'remote' => true, 'url' => 'https://jev.test', 'api_key' => 'jev-key', 'timeout' => '7', 'profile' => 'jev',
+        'models' => 'jev-1,jev-2', 'model' => 'jev-2', 'retries' => '0', 'retry_delay' => '',
+    ]);
+});
+
+it('keeps local the default when the remote connections have keys', function (): void {
+    $config = systemOneConfigWith([
+        ...SYSTEM_ONE_ENVIRONMENT,
+        'SYSTEM_ONE_LAYA_HOSTED_API_KEY' => 'lh-key',
+        'SYSTEM_ONE_JEV_API_KEY' => 'jev-key',
+    ]);
+    config(['system-one' => $config]);
+    Http::fake(['*' => Http::response(['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.1]]])]);
+
+    SystemOne::decide(Decision::about(Context::text('x'))->ask(Question::yesNo('churn', 'Cancel?')));
+
+    expect($config['default'])->toBe('local');
+    Http::assertSent(fn (Request $request): bool => $request->url() === 'http://localhost:8000/v1/systemone' && ! $request->hasHeader('Authorization'));
 });
 
 /**

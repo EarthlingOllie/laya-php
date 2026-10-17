@@ -16,9 +16,11 @@ use EarthlingOllie\SystemOneClassification\Transport\Transport;
 /** Sends decisions to one host and returns typed results. One client per connection. */
 final readonly class DecisionClient
 {
+    /** @param  ?string  $model  sent as `model` with every decision that pins none; null lets the server route */
     public function __construct(
         private Transport $transport,
         private SystemOneCodec $codec,
+        private ?string $model = null,
     ) {}
 
     /**
@@ -29,7 +31,7 @@ final readonly class DecisionClient
      */
     public function decide(Decision $decision): Result
     {
-        $body = $this->codec->encode($decision);
+        $body = $this->codec->encode($decision, $this->model);
 
         return $this->codec->decode($decision, $this->transport->post(SystemOneCodec::PATH, $body));
     }

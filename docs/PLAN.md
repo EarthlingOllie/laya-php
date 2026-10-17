@@ -205,7 +205,10 @@ volume.
 recording environment (HTTP 403 from its egress proxy). `bin/fetch-jev-openapi`
 saves it to `tests/Fixtures/jev/openapi.json`; until it has been run, that
 directory holds only a marked placeholder, and the comparison with the
-recorded fixtures is still to do.
+recorded fixtures is still to do. Tried again for #9 on 2026-10-17: still refused
+by the egress proxy. Until it is fetched, the request-schema contract tests run
+against a hand-written stand-in, `tests/Fixtures/jev/provisional/openapi.json`
+(marked `x-provisional`; see "Laravel integration" below).
 
 ## Architecture
 
@@ -391,10 +394,19 @@ How the typing works:
     threshold above the yes threshold.
   - `InvalidConfiguration`: `config/system-one.php` doesn't describe a usable
     connection.
-  - `HostUnavailable`: the server couldn't be reached, or answered with any 5xx.
+  - `HostUnavailable`: the server couldn't be reached, or answered with any 5xx,
+    after the connection's retries (since #9; the message names the attempts
+    when a connection failed more than once).
     The message is redacted (`Transport\Redactor`: URL credentials, query
     values and the API key), and the HTTP client's exception isn't chained.
-  - `RejectedByModel`: the server returned 4xx (`status`, `detail`).
+  - `RejectedByModel`: the server returned 4xx (`status`, `detail`), never
+    retried. Since #9 `detail` is read by `Protocol\ErrorDetail` out of any of
+    the shapes a host or gateway uses: `{"detail": "..."}`, FastAPI's validation
+    list (as `loc: msg` pairs, leaving out the `input` it echoes),
+    `{"message": ...}`, `{"error": ...}` or `{"error": {"message": ...}}`, or a
+    plain-text body (collapsed, cut to 200 characters; an HTML page is no
+    message). HttpTransport masks the connection's secrets and echoed URL
+    credentials in every non-2xx body before the codec reads it.
   - `MalformedResponse`: the status or JSON didn't match the protocol (`body`
     holds the raw response).
 - **One dispatch per question type.** `SystemOneCodec::wire()` maps each
@@ -419,6 +431,59 @@ How the typing works:
   beyond the profile's own). Anything else in either is `InvalidConfiguration`.
   `SystemOneManager` reads the config on every call, so runtime `config()`
   changes apply.
+- **Named connections (#9).** The shipped config has three: `local` (the
+  default), `laya-hosted` (`https://api.laya-ai.com`) and `jev`
+  (`https://api.typesafe.ai`), each with `url`, `api_key`, `profile`,
+  `tournament_grouping` (not on jev), `models`, `model`, `timeout`, `retries` and
+  `retry_delay`, read from `SYSTEM_ONE_*`, `SYSTEM_ONE_LAYA_HOSTED_*` and
+  `SYSTEM_ONE_JEV_*`.
+  - `remote` (true on `laya-hosted` and `jev`; any connection may set it):
+    `connection()` refuses a remote connection without an `api_key`
+    (`InvalidConfiguration`, nothing sent), and its `url` must be https (plain
+    http only to localhost, 127.0.0.0/8 or ::1). Keys set for remote hosts never
+    change the default, which stays `local` unless `SYSTEM_ONE_CONNECTION`
+    names another (then that connection still needs its key).
+  - `model` (#12 uses the same key and `InvalidConfiguration::modelNotString`):
+    sent when a decision pins none (`SystemOneCodec::encode($decision, $model)`,
+    `DecisionClient(..., model:)`); a pin wins. It is trimmed, empty means the
+    server routes, and it counts as one of the connection's `models`, so it is
+    never refused by its own profile.
+  - `retries` / `retry_delay` (`Transport\RetryPolicy`): a 5xx or a failed
+    connection is sent again up to `retries` times, waiting `retry_delay` ms
+    (default 200) doubled before each further retry, at most 30 s. A 4xx never
+    is. The shipped config retries twice (200 ms locally, 500 ms remote); a
+    connection that sets no `retries` retries nothing, and none may set more
+    than 10. A 5xx's `Retry-After` (seconds) wins over a shorter backoff,
+    within the same cap. Timeouts are retried too (the issue asks for transport
+    failures to be), so a slow host may answer, and bill, one decision twice;
+    the config says so. The waits go through `Illuminate\Support\Sleep`
+    (`Laravel\LaravelSleeper`), faked in every Feature test.
+  - The API key goes out only as the bearer token. `HttpTransport` and
+    `Laravel\ConnectionConfig` hold it as a `SensitiveParameterValue` behind a
+    `#[SensitiveParameter]`, so dumps, `var_export()`, `json_encode()` and stack
+    traces never show it, and `serialize()` refuses it. Requests go through
+    `Laravel\QuietHttpFactory`, the app's HTTP factory without its event
+    dispatcher, so Laravel's `RequestSending`, `ResponseReceived` and
+    `ConnectionFailed` (which carry the Authorization header) are not
+    dispatched for them; `Http::fake()` and the app's global middleware still
+    apply, but Telescope and Pulse do not see these requests. Error bodies are
+    masked of the key and echoed URL credentials before anything reads them.
+  - `remote` is opt-in: a connection added without it gets neither check. It
+    cannot be inferred from the URL, since a Sail app reaches its own
+    laya-serve with a key over `http://laya:8000`.
+  - An app that published `config/system-one.php` before #9 keeps its own
+    `connections` (`mergeConfigFrom` merges top-level keys only): republish it,
+    or copy the `laya-hosted` and `jev` blocks in, to get them.
+  - `SystemOneManager::configuration($name)` returns the checked
+    `ConnectionConfig` without requiring the key: what the testing fake (#10)
+    should check, so that faking a remote connection needs no real key.
+  - Contract tests check every encoded request body against the request schema
+    of `POST /v1/systemone` in Jev's OpenAPI document (`Tests\Support\JevSchema`,
+    justinrainbow/json-schema), currently the provisional stand-in.
+  - Smoke tests (`tests/Smoke`, `composer test:smoke`, not a default suite) reach
+    the real hosts; each skips without its key, and the manual "Smoke (remote
+    hosts)" workflow (workflow_dispatch only) fails a chosen host whose key is
+    missing (`SYSTEM_ONE_REQUIRE_SMOKE`).
 - A singleton is bound in the container and exposed through a `SystemOne`
   facade.
 - `SystemOne::fake([...])` returns scripted answers and lets tests assert on the
