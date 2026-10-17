@@ -66,6 +66,19 @@ it('leaves the decision unchanged when a duplicate key is rejected', function ()
     expect($decision->questions())->toBe([$churn]);
 });
 
+it('returns a new decision about another context from withContext(), with the same questions', function (): void {
+    $churn = Question::yesNo('churn', 'Does the customer threaten to cancel?');
+    $original = Decision::about(Context::text('We were billed twice.'))->ask($churn);
+    $other = Context::text('The app crashes.');
+
+    $moved = $original->withContext($other);
+
+    expect($moved)->not->toBe($original)
+        ->and($moved->context)->toBe($other)
+        ->and($moved->questions())->toBe([$churn])
+        ->and($original->context->text)->toBe('We were billed twice.');
+});
+
 it('cannot be changed after construction', function (): void {
     $decision = Decision::about(Context::text('We were billed twice.'));
 

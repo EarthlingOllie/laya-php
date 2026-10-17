@@ -45,6 +45,21 @@ final class InvalidDecision extends InvalidArgumentException implements SystemOn
         return new self('The decision asks no questions; add one with ask().');
     }
 
+    public static function noContexts(): self
+    {
+        return new self('decideMany() needs at least one context.');
+    }
+
+    public static function contextsNotList(): self
+    {
+        return new self('decideMany() takes the contexts as a list (keys 0, 1, 2, ...), so each result can be read back at its position.');
+    }
+
+    public static function notAContext(int $position, mixed $value): self
+    {
+        return new self("Context {$position} of the batch is ".get_debug_type($value).', not a Context; build it with Context::text().');
+    }
+
     public static function unsupportedQuestion(object $question): self
     {
         return new self('The wire format has no question type for '.get_debug_type($question).'.');

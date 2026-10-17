@@ -18,8 +18,11 @@ use EarthlingOllie\SystemOneClassification\Laravel\Facades\SystemOne;
 use EarthlingOllie\SystemOneClassification\Result\Answer\Answer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Result;
+use EarthlingOllie\SystemOneClassification\Result\ResultSet;
+use EarthlingOllie\SystemOneClassification\Result\Usage;
 use EarthlingOllie\SystemOneClassification\Result\Verdict;
 
+use function count;
 use function PHPStan\Testing\assertType;
 
 function yesNoAnswerTypes(Result $result): void
@@ -50,4 +53,24 @@ function facadeTypes(): void
     assertType(Result::class, SystemOne::decide($decision));
     assertType(YesNoAnswer::class, SystemOne::decide($decision)->get($churn));
     assertType(Result::class, SystemOne::connection('local')->decide($decision));
+}
+
+function resultSetTypes(): void
+{
+    $churn = Question::yesNo('churn', 'Does the customer threaten to cancel?');
+    $decision = Decision::about(Context::text('template'))->ask($churn);
+    $results = SystemOne::decideMany([Context::text('We were billed twice.')], $decision);
+
+    assertType(ResultSet::class, $results);
+    assertType(ResultSet::class, SystemOne::connection('local')->decideMany([Context::text('x')], $decision));
+    assertType(Result::class, $results[0]);
+    assertType(YesNoAnswer::class, $results[0]->get($churn));
+    assertType('int<0, max>', count($results));
+    assertType(Usage::class.'|null', $results->usage);
+    assertType('list<'.Result::class.'>', $results->all());
+
+    foreach ($results as $position => $result) {
+        assertType('int', $position);
+        assertType('float', $result->get($churn)->probability);
+    }
 }

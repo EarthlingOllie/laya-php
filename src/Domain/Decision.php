@@ -54,6 +54,15 @@ final readonly class Decision
     }
 
     /**
+     * A new decision that asks the same questions, with the same settings, about another
+     * context. decideMany() uses it to ask one decision's questions about many contexts.
+     */
+    public function withContext(Context $context): self
+    {
+        return new self($context, $this->questions);
+    }
+
+    /**
      * @return list<QuestionHandle<Answer>>
      */
     public function questions(): array

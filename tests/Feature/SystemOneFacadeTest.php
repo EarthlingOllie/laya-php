@@ -125,3 +125,25 @@ it('raises HostUnavailable for a 5xx and MalformedResponse for an unexpected bod
     expect(fn () => SystemOne::decide($decision))->toThrow(HostUnavailable::class, 'inference failed')
         ->and(fn () => SystemOne::decide($decision))->toThrow(MalformedResponse::class);
 });
+
+it('decides many contexts through the facade against the batch endpoint of the default connection', function (): void {
+    config(['system-one.connections.local.url' => 'http://laya.test:8000', 'system-one.connections.local.api_key' => 'k']);
+    Http::fake(['*' => Http::response([
+        'results' => [
+            ['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.91]]],
+            ['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.05]]],
+        ],
+        'total_usage' => ['input_tokens' => 120, 'output_tokens' => 0],
+    ])]);
+    $decision = Decision::about(Context::text('template'))->ask(churnQuestion());
+
+    $results = SystemOne::decideMany([Context::text('We will cancel.'), Context::text('Thanks!')], $decision);
+
+    expect($results)->toHaveCount(2)
+        ->and($results[0]->get(churnQuestion())->verdict(yes: 0.8, no: 0.2))->toBe(Verdict::Yes)
+        ->and($results[1]->get(churnQuestion())->verdict(yes: 0.8, no: 0.2))->toBe(Verdict::No)
+        ->and($results->usage?->inputTokens)->toBe(120);
+    Http::assertSent(fn (Request $request): bool => $request->url() === 'http://laya.test:8000/v1/systemone/batch'
+        && $request['states'] === ['We will cancel.', 'Thanks!']
+        && $request->hasHeader('Authorization', 'Bearer k'));
+});
