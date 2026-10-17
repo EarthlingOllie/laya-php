@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidProbability;
+use EarthlingOllie\SystemOneClassification\Result\Abstention;
 use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Verdict;
 
@@ -68,4 +69,44 @@ it('rejects a probability outside [0, 1]', function (float $probability): void {
 
 it('has exactly the three verdicts', function (): void {
     expect(Verdict::cases())->toBe([Verdict::Yes, Verdict::No, Verdict::Unsure]);
+});
+
+it('has not abstained when no minimum confidence was asked for', function (): void {
+    $answer = new YesNoAnswer(0.5);
+
+    expect($answer->abstained)->toBeFalse()
+        ->and($answer->abstention)->toBe(Abstention::NotRequested)
+        ->and($answer->abstentionThreshold)->toBeNull();
+});
+
+it('has abstained only when the gate says abstained', function (Abstention $abstention, bool $abstained): void {
+    $answer = new YesNoAnswer(0.5, $abstention, 0.9);
+
+    expect($answer->abstained)->toBe($abstained)
+        ->and($answer->abstention)->toBe($abstention)
+        ->and($answer->abstentionThreshold)->toBe(0.9);
+})->with([
+    'abstained' => [Abstention::Abstained, true],
+    'passed' => [Abstention::Passed, false],
+    'unevaluated' => [Abstention::Unevaluated, false],
+]);
+
+it('keeps the best guess when it abstained', function (): void {
+    $answer = new YesNoAnswer(0.97, Abstention::Abstained, 0.99);
+
+    expect($answer->probability)->toBe(0.97)
+        ->and($answer->isYes())->toBeTrue()
+        ->and($answer->abstained)->toBeTrue();
+});
+
+it('accepts an abstention threshold at either end of [0, 1]', function (float $threshold): void {
+    expect((new YesNoAnswer(0.5, Abstention::Passed, $threshold))->abstentionThreshold)->toBe($threshold);
+})->with([0.0, 1.0]);
+
+it('rejects an abstention threshold outside [0, 1]', function (float $threshold): void {
+    new YesNoAnswer(0.5, Abstention::Passed, $threshold);
+})->with([-0.01, 1.01, NAN])->throws(InvalidProbability::class, 'The abstention threshold must be between 0 and 1');
+
+it('has the three gate states the server reports, plus not requested', function (): void {
+    expect(Abstention::cases())->toBe([Abstention::NotRequested, Abstention::Passed, Abstention::Abstained, Abstention::Unevaluated]);
 });

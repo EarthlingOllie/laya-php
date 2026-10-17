@@ -27,6 +27,54 @@ it('renders the probability and verdict of a yes/no question', function (): void
         && $request['questions'] === ['churn' => ['type' => 'noul', 'instructions' => 'Does the customer threaten to cancel or leave?']]);
 });
 
+it('sends ?min_confidence= and renders the abstention and the call metadata', function (): void {
+    Http::fake(['*' => Http::response([
+        'model' => 'laya-rl-agent',
+        'answers' => ['churn' => ['type' => 'noul', 'noul' => 0.5, 'low_confidence' => true, 'abstention' => 'abstained', 'abstention_threshold' => 0.9]],
+        'usage' => ['input_tokens' => 44, 'output_tokens' => 0],
+        'routing' => ['model' => 'english', 'reason' => 'English Latin text'],
+    ])]);
+
+    $this->get('/decide?min_confidence=0.9')
+        ->assertOk()
+        ->assertSee('data-abstained="yes"', escape: false)
+        ->assertSee('data-abstention="Abstained"', escape: false)
+        ->assertSee('data-abstention-threshold="0.9"', escape: false)
+        ->assertSee('data-model="laya-rl-agent"', escape: false)
+        ->assertSee('data-checkpoint="english"', escape: false)
+        ->assertSee('data-routing-reason="English Latin text"', escape: false)
+        ->assertSee('data-input-tokens="44"', escape: false)
+        ->assertSee('data-output-tokens="0"', escape: false)
+        ->assertSee('data-latency-ms="', escape: false);
+
+    Http::assertSent(fn (Request $request): bool => $request['min_confidence'] === 0.9);
+});
+
+it('sends no minimum confidence without a usable ?min_confidence=', function (string $query): void {
+    Http::fake(['*' => Http::response(['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.5]]])]);
+
+    $this->get('/decide?'.$query)
+        ->assertOk()
+        ->assertSee('data-abstained="no"', escape: false)
+        ->assertSee('data-abstention="NotRequested"', escape: false)
+        ->assertSee('data-abstention-threshold=""', escape: false)
+        ->assertSee('data-model=""', escape: false);
+
+    Http::assertSent(fn (Request $request): bool => ! array_key_exists('min_confidence', $request->data()));
+})->with(['absent' => '', 'empty' => 'min_confidence=', 'not a number' => 'min_confidence=high', 'array' => 'min_confidence[]=1']);
+
+it('renders an out-of-range ?min_confidence= as the package error with a 422 status', function (string $value): void {
+    Http::fake();
+
+    // The query string is the caller's input, so the page answers 422, not a 500 of its own.
+    $this->get("/decide?min_confidence={$value}")
+        ->assertStatus(422)
+        ->assertSee('data-error="InvalidDecision"', escape: false)
+        ->assertSee("The minimum confidence must be between 0 and 1, got {$value}.");
+
+    Http::assertNothingSent();
+})->with(['above' => '1.5', 'a percent' => '80', 'below' => '-0.1']);
+
 it('renders Unsure and No verdicts', function (float $noul, string $verdict, string $isYes): void {
     Http::fake(['*' => Http::response(['answers' => ['churn' => ['type' => 'noul', 'noul' => $noul]]])]);
 

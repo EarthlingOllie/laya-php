@@ -15,8 +15,10 @@ use EarthlingOllie\SystemOneClassification\Domain\Question;
 use EarthlingOllie\SystemOneClassification\Domain\Question\QuestionHandle;
 use EarthlingOllie\SystemOneClassification\Domain\Question\YesNoQuestion;
 use EarthlingOllie\SystemOneClassification\Laravel\Facades\SystemOne;
+use EarthlingOllie\SystemOneClassification\Result\Abstention;
 use EarthlingOllie\SystemOneClassification\Result\Answer\Answer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
+use EarthlingOllie\SystemOneClassification\Result\Meta;
 use EarthlingOllie\SystemOneClassification\Result\Result;
 use EarthlingOllie\SystemOneClassification\Result\Verdict;
 
@@ -31,6 +33,20 @@ function yesNoAnswerTypes(Result $result): void
     assertType('float', $result->get($churn)->probability);
     assertType('bool', $result->get($churn)->isYes(threshold: 0.8));
     assertType(Verdict::class, $result->get($churn)->verdict(yes: 0.8, no: 0.2));
+    assertType('bool', $result->get($churn)->abstained);
+    assertType(Abstention::class, $result->get($churn)->abstention);
+    assertType('float|null', $result->get($churn)->abstentionThreshold);
+}
+
+function metaTypes(Result $result): void
+{
+    assertType(Meta::class, $result->meta);
+    assertType('string|null', $result->meta->model);
+    assertType('string|null', $result->meta->checkpoint);
+    assertType('string|null', $result->meta->routingReason);
+    assertType('int<0, max>|null', $result->meta->inputTokens);
+    assertType('int<0, max>|null', $result->meta->outputTokens);
+    assertType('float|null', $result->meta->latencyMs);
 }
 
 /**
@@ -39,6 +55,7 @@ function yesNoAnswerTypes(Result $result): void
 function genericHandleTypes(Result $result, QuestionHandle $anyQuestion): void
 {
     assertType(Answer::class, $result->get($anyQuestion));
+    assertType('bool', $result->get($anyQuestion)->abstained);
 }
 
 function facadeTypes(): void

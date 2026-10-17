@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace EarthlingOllie\SystemOneClassification\Exceptions;
 
 use InvalidArgumentException;
+use JsonException;
 
 use function get_debug_type;
 
@@ -14,6 +15,37 @@ final class InvalidDecision extends InvalidArgumentException implements SystemOn
     public static function emptyText(): self
     {
         return new self('The context text must not be empty.');
+    }
+
+    public static function emptyFields(): self
+    {
+        return new self('The context fields must not be empty.');
+    }
+
+    public static function unnamedFields(): self
+    {
+        return new self('The context fields must be named: every top-level key must be a string that is not a whole number, so they are sent as a JSON object.');
+    }
+
+    public static function notPlainField(string $path, string $type): self
+    {
+        return new self("The context field '{$path}' holds a {$type}, which is not plain JSON data; pass arrays and scalars only.");
+    }
+
+    public static function nonFiniteField(string $path, float $value): self
+    {
+        return new self("The context field '{$path}' holds a float that is not finite ({$value}), which JSON cannot represent.");
+    }
+
+    public static function unserialisableFields(JsonException $reason): self
+    {
+        return new self('The context fields are not JSON-serialisable: '.$reason->getMessage().'.', previous: $reason);
+    }
+
+    /** Worded like json_encode's own depth error, which a field this deep would otherwise raise. */
+    public static function tooDeepField(string $field, int $limit): self
+    {
+        return new self("The context fields are not JSON-serialisable: Maximum stack depth exceeded in the field '{$field}', which nests arrays deeper than the {$limit} levels JSON allows.");
     }
 
     public static function emptyKey(): self
@@ -48,5 +80,20 @@ final class InvalidDecision extends InvalidArgumentException implements SystemOn
     public static function unsupportedQuestion(object $question): self
     {
         return new self('The wire format has no question type for '.get_debug_type($question).'.');
+    }
+
+    public static function minConfidenceOutOfRange(float $minConfidence): self
+    {
+        return new self("The minimum confidence must be between 0 and 1, got {$minConfidence}.");
+    }
+
+    public static function emptyLanguage(string $name): self
+    {
+        return new self("{$name} must not be empty.");
+    }
+
+    public static function nonPositiveLength(string $name, int $tokens): self
+    {
+        return new self("{$name} must be a positive number of tokens, got {$tokens}.");
     }
 }

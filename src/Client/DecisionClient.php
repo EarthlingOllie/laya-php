@@ -19,9 +19,12 @@ final readonly class DecisionClient
     public function __construct(
         private Transport $transport,
         private SystemOneCodec $codec,
+        private Clock $clock = new SystemClock,
     ) {}
 
     /**
+     * The result's meta carries the latency of the transport round trip only, not encoding or decoding.
+     *
      * @throws InvalidDecision before anything is sent
      * @throws HostUnavailable
      * @throws RejectedByModel
@@ -31,6 +34,10 @@ final readonly class DecisionClient
     {
         $body = $this->codec->encode($decision);
 
-        return $this->codec->decode($decision, $this->transport->post(SystemOneCodec::PATH, $body));
+        $started = $this->clock->now();
+        $response = $this->transport->post(SystemOneCodec::PATH, $body);
+        $latencyMs = ($this->clock->now() - $started) * 1000;
+
+        return $this->codec->decode($decision, $response, $latencyMs);
     }
 }

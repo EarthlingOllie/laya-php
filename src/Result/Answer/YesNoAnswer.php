@@ -5,17 +5,33 @@ declare(strict_types=1);
 namespace EarthlingOllie\SystemOneClassification\Result\Answer;
 
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidProbability;
+use EarthlingOllie\SystemOneClassification\Result\Abstention;
 use EarthlingOllie\SystemOneClassification\Result\Verdict;
 
-/** The answer to a yes/no question: the probability that the statement is true. */
+/**
+ * The answer to a yes/no question: the probability that the statement is true.
+ *
+ * The probability is the model's best guess even when the answer abstained.
+ */
 final readonly class YesNoAnswer implements Answer
 {
-    /** @throws InvalidProbability when the probability is outside [0, 1] */
-    public function __construct(public float $probability)
-    {
+    public bool $abstained;
+
+    /** @throws InvalidProbability when the probability or the abstention threshold is outside [0, 1] */
+    public function __construct(
+        public float $probability,
+        public Abstention $abstention = Abstention::NotRequested,
+        public ?float $abstentionThreshold = null,
+    ) {
         if (! self::isUnitInterval($probability)) {
             throw InvalidProbability::outOfRange('A probability', $probability);
         }
+
+        if ($abstentionThreshold !== null && ! self::isUnitInterval($abstentionThreshold)) {
+            throw InvalidProbability::outOfRange('The abstention threshold', $abstentionThreshold);
+        }
+
+        $this->abstained = $abstention === Abstention::Abstained;
     }
 
     /**

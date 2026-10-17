@@ -6,6 +6,7 @@ use EarthlingOllie\SystemOneClassification\Domain\Context;
 use EarthlingOllie\SystemOneClassification\Domain\Decision;
 use EarthlingOllie\SystemOneClassification\Domain\Question;
 use EarthlingOllie\SystemOneClassification\Exceptions\HostUnavailable;
+use EarthlingOllie\SystemOneClassification\Exceptions\InvalidDecision;
 use EarthlingOllie\SystemOneClassification\Exceptions\MalformedResponse;
 use EarthlingOllie\SystemOneClassification\Exceptions\RejectedByModel;
 use EarthlingOllie\SystemOneClassification\Exceptions\SystemOneException;
@@ -44,10 +45,13 @@ Route::get('/', function (Application $app): string {
 
 /*
  * One yes/no question, end to end: SystemOne::decide() against the default connection
- * (SYSTEM_ONE_URL). A non-blank ?text= replaces the default ticket. A package exception is
+ * (SYSTEM_ONE_URL). A non-blank ?text= replaces the default ticket, and a numeric
+ * ?min_confidence= turns on the abstention gate; the page shows the abstention and the call
+ * metadata (model, checkpoint, routing reason, tokens, latency). A package exception is
  * rendered as an error page: 503 when the server is unreachable or down (HostUnavailable),
  * 502 when it refused the decision or answered nonsense (RejectedByModel,
- * MalformedResponse), 500 for this app's own mistakes (InvalidConfiguration and the rest).
+ * MalformedResponse), 422 when the query string makes the decision invalid (InvalidDecision),
+ * 500 for this app's own mistakes (InvalidConfiguration and the rest).
  * Messages are shown as the package wrote them; HostUnavailable's are already redacted.
  *
  * Under `composer serve` the shell environment does not reach this app (Testbench turns
@@ -62,26 +66,58 @@ Route::get('/decide', function (Request $request): Response {
     if (! is_string($text) || trim($text) === '') {
         $text = 'Hi, we were billed twice for March. Please refund the duplicate charge today or we will cancel our plan.';
     }
+    // A numeric ?min_confidence= is sent as withMinConfidence(); anything else sends none.
+    $minConfidence = $request->query('min_confidence');
+    $minConfidence = is_string($minConfidence) && is_numeric($minConfidence) ? (float) $minConfidence : null;
     $churn = Question::yesNo('churn', 'Does the customer threaten to cancel or leave?');
     $status = 200;
 
     try {
-        $answer = SystemOne::decide(Decision::about(Context::text($text))->ask($churn))->get($churn);
+        $decision = Decision::about(Context::text($text))->ask($churn);
+        if ($minConfidence !== null) {
+            $decision = $decision->withMinConfidence($minConfidence);
+        }
+        $result = SystemOne::decide($decision);
+        $answer = $result->get($churn);
+        $meta = $result->meta;
         $probability = e((string) $answer->probability);
         $verdict = e($answer->verdict(yes: 0.8, no: 0.2)->name);
         $isYes = $answer->isYes() ? 'yes' : 'no';
+        $abstained = $answer->abstained ? 'yes' : 'no';
+        $abstention = e($answer->abstention->name);
+        $threshold = e((string) $answer->abstentionThreshold);
+        $model = e((string) $meta->model);
+        $checkpoint = e((string) $meta->checkpoint);
+        $reason = e((string) $meta->routingReason);
+        $inputTokens = e((string) $meta->inputTokens);
+        $outputTokens = e((string) $meta->outputTokens);
+        $latency = e($meta->latencyMs === null ? '' : number_format($meta->latencyMs, 1, '.', ''));
         $outcome = <<<HTML
-            <dl id="answer" data-probability="{$probability}" data-verdict="{$verdict}" data-is-yes="{$isYes}">
+            <dl id="answer" data-probability="{$probability}" data-verdict="{$verdict}" data-is-yes="{$isYes}"
+                data-abstained="{$abstained}" data-abstention="{$abstention}" data-abstention-threshold="{$threshold}">
                 <dt>probability</dt><dd>{$probability}</dd>
                 <dt>isYes() (threshold 0.5)</dt><dd>{$isYes}</dd>
                 <dt>verdict(yes: 0.8, no: 0.2)</dt><dd>{$verdict}</dd>
+                <dt>abstained (best guess kept above)</dt><dd>{$abstained}</dd>
+                <dt>abstention / threshold</dt><dd>{$abstention} / {$threshold}</dd>
+            </dl>
+            <h2>Call metadata</h2>
+            <dl id="meta" data-model="{$model}" data-checkpoint="{$checkpoint}" data-routing-reason="{$reason}"
+                data-input-tokens="{$inputTokens}" data-output-tokens="{$outputTokens}" data-latency-ms="{$latency}">
+                <dt>model</dt><dd>{$model}</dd>
+                <dt>checkpoint</dt><dd>{$checkpoint}</dd>
+                <dt>routing reason</dt><dd>{$reason}</dd>
+                <dt>tokens in / out</dt><dd>{$inputTokens} / {$outputTokens}</dd>
+                <dt>latency (ms, client-side)</dt><dd>{$latency}</dd>
             </dl>
             HTML;
     } catch (SystemOneException $exception) {
         $status = match (true) {
             $exception instanceof HostUnavailable => 503,
             $exception instanceof RejectedByModel, $exception instanceof MalformedResponse => 502,
-            default => 500, // this app's own mistake: InvalidConfiguration, InvalidDecision, ...
+            // The page builds a valid decision unless the query string breaks it (?min_confidence=80).
+            $exception instanceof InvalidDecision => 422,
+            default => 500, // this app's own mistake: InvalidConfiguration and the rest
         };
         $type = e(class_basename($exception));
         $message = e($exception->getMessage());

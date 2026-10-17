@@ -510,3 +510,47 @@ New questions get added here as they come up.
    `abstained` from `abstention === 'abstained'` (falling back to
    `low_confidence` when `abstention` is missing), and decide whether
    `unevaluated` needs its own representation or reads as "not abstained".
+
+   **Settled in #7.** Every answer (the `Answer` interface) has `abstained`,
+   `abstention` and `abstentionThreshold`. `abstained` is true only for
+   `Result\Abstention::Abstained`. `abstention` is that enum: `Passed`,
+   `Abstained`, `Unevaluated` (gate ran, no usable confidence) or
+   `NotRequested` (no `min_confidence`, so no gate ran). `abstention` decides,
+   and `low_confidence: true` without it reads as `Abstained`. The codec reads
+   all three fields in one helper (`decodeAbstention`), which each new answer
+   type's decoder spreads into its constructor.
+
+   An answer with neither `abstention` nor `low_confidence: true` reads as
+   `NotRequested` only when the decision set no `min_confidence`. When it did,
+   the answer reads as `Unevaluated`: a gate was asked for and the server gave
+   no verdict. It does not read as `Passed`, because a missing (or `false`)
+   `low_confidence` is not a pass. Laya also leaves the flag off answers it
+   could not evaluate, and its gate docs call reporting those as a pass "the
+   same lie as reporting it as a flag". Laya 0.4.8 always sends `abstention`
+   when `min_confidence` is set (live and in the fixtures), so this only
+   applies to a host that does not, such as Jev, whose spec is still unknown.
+
+2. **How strictly is response metadata read?** `usage` and `routing` are
+   informational, and hosts differ (Jev, and laya-serve under
+   `LAYA_JEV_STRICT=1`, send no `routing`), so a strict check could cost a
+   caller valid answers over a field it may never read.
+
+   **Settled in #7: strict, like the answers.** Each meta field is optional,
+   and keys the codec doesn't read are ignored, which already covers the
+   known differences between hosts. A field that is present but has the wrong
+   shape (`"routing": "english"`, a string token count) raises
+   `MalformedResponse` with the raw body. It is not mapped to null. `Meta`'s
+   null means "the host did not report this", and turning a broken report
+   into a null would make usage totals undercount without any sign. A root
+   field changing shape also means the protocol has drifted, so the answers
+   in the same body can't be trusted either. laya-serve 0.4.8 always sends
+   whole-number token counts (`int(...)` sums in `agent.py` and `serve.py`)
+   and a `routing` object (`dict(decision)` in `router.py`), so no recorded
+   host trips the check. A per-profile split (strict for Laya, tolerant for
+   others) was rejected because it means two behaviours to keep and test, for
+   a host whose spec isn't known yet.
+
+   One exception: a token count written as a whole number with a fraction or
+   exponent (`12.0`, `1e2`) is the same JSON number as `12` or `100`, so it
+   reads as that int. Fractional, negative, infinite and out-of-range values
+   are still refused.

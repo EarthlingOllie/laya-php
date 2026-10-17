@@ -15,8 +15,12 @@ final readonly class Result
 {
     /**
      * @param  array<string, array{question: QuestionHandle<Answer>, answer: Answer}>  $answers  each asked handle with its answer, keyed by question key
+     * @param  Meta  $meta  what the call reported about itself: model, routing, usage, latency
      */
-    public function __construct(private array $answers) {}
+    public function __construct(
+        private array $answers,
+        public Meta $meta = new Meta,
+    ) {}
 
     /**
      * Reads the answer to an asked question.

@@ -12,7 +12,9 @@ use EarthlingOllie\SystemOneClassification\Exceptions\MalformedResponse;
 use EarthlingOllie\SystemOneClassification\Exceptions\RejectedByModel;
 use EarthlingOllie\SystemOneClassification\Exceptions\UnknownQuestion;
 use EarthlingOllie\SystemOneClassification\Protocol\SystemOneCodec;
+use EarthlingOllie\SystemOneClassification\Result\Abstention;
 use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
+use EarthlingOllie\SystemOneClassification\Result\Meta;
 use EarthlingOllie\SystemOneClassification\Transport\Response;
 
 function churnDecision(): Decision
@@ -40,6 +42,68 @@ it('encodes the context as the state and every question under its key', function
             'refund' => ['type' => 'noul', 'instructions' => 'Do they ask for a refund?'],
         ],
     ]);
+});
+
+it('encodes the deepest fields a context accepts into a request body that is still valid JSON', function (): void {
+    // The body wraps the fields object (body → state → fields), so the deepest accepted field
+    // must still fit json_encode's 512 levels once it sits inside the body.
+    $nest = function (int $levels): array {
+        $leaf = 'leaf';
+        for ($i = 0; $i < $levels; $i++) {
+            $leaf = ['n' => $leaf];
+        }
+
+        return $leaf;
+    };
+    // The body is level 1 and the fields object level 2, so a field may nest 510 arrays.
+    $decision = Decision::about(Context::fields(['deep' => $nest(510)]))
+        ->ask(Question::yesNo('churn', 'Does the customer threaten to cancel?'));
+
+    expect(json_encode((new SystemOneCodec)->encode($decision)))->toBeString()
+        ->and(fn () => Context::fields(['deep' => $nest(511)]))
+        ->toThrow(InvalidDecision::class, "Maximum stack depth exceeded in the field 'deep', which nests arrays deeper than the 512 levels JSON allows.");
+});
+
+it('sends each request control under its protocol field, between the state and the questions', function (): void {
+    $decision = churnDecision()
+        ->withHeadMaxLength(32)
+        ->withMaxLength(256)
+        ->withLanguageHint('en_GB')
+        ->withLanguage('en')
+        ->withMinConfidence(0.75);
+
+    $body = (new SystemOneCodec)->encode($decision);
+
+    expect($body)->toBe([
+        'state' => 'We will cancel.',
+        'min_confidence' => 0.75,
+        'lang' => 'en',
+        'lang_guess' => 'en_GB',
+        'max_len' => 256,
+        'head_max_len' => 32,
+        'questions' => ['churn' => ['type' => 'noul', 'instructions' => 'Does the customer threaten to cancel?']],
+    ]);
+});
+
+it('sends structured fields as a JSON object state', function (): void {
+    $decision = Decision::about(Context::fields(['subject' => 'Charged twice', 'meta' => ['seats' => 3, 'tags' => []]]))
+        ->ask(Question::yesNo('churn', 'Does the customer threaten to cancel?'));
+
+    $body = (new SystemOneCodec)->encode($decision);
+
+    expect($body['state'])->toBe(['subject' => 'Charged twice', 'meta' => ['seats' => 3, 'tags' => []]])
+        ->and(json_encode($body['state'], JSON_THROW_ON_ERROR))->toBe('{"subject":"Charged twice","meta":{"seats":3,"tags":[]}}');
+});
+
+it('sends only the request controls that were set', function (): void {
+    $body = (new SystemOneCodec)->encode(churnDecision()->withMaxLength(64));
+
+    expect(array_keys($body))->toBe(['state', 'max_len', 'questions'])
+        ->and($body['max_len'] ?? null)->toBe(64);
+});
+
+it('sends a minimum confidence of zero rather than dropping it', function (): void {
+    expect((new SystemOneCodec)->encode(churnDecision()->withMinConfidence(0.0)))->toHaveKey('min_confidence', 0.0);
 });
 
 it('refuses to encode a decision that asks nothing', function (): void {
@@ -117,6 +181,146 @@ it('raises MalformedResponse for a body that does not match the expected shape',
     'noul above 1' => ['{"answers": {"churn": {"type": "noul", "noul": 1.2}}}', "The answer for 'churn' has a 'noul' probability outside [0, 1]: 1.2."],
     'noul below 0' => ['{"answers": {"churn": {"type": "noul", "noul": -0.1}}}', "The answer for 'churn' has a 'noul' probability outside [0, 1]: -0.1."],
 ]);
+
+/** @param array<string, mixed> $gate the abstention fields of the churn answer */
+function churnAnswerWith(array $gate): YesNoAnswer
+{
+    return (new SystemOneCodec)->decode(churnDecision(), okResponse([
+        'answers' => ['churn' => ['type' => 'noul', 'noul' => 0.73, ...$gate]],
+    ]))->get(Question::yesNo('churn', 'Does the customer threaten to cancel?'));
+}
+
+it('reads the abstention gate of an answer', function (array $gate, Abstention $abstention, bool $abstained, ?float $threshold): void {
+    $answer = churnAnswerWith($gate);
+
+    expect($answer->abstention)->toBe($abstention)
+        ->and($answer->abstained)->toBe($abstained)
+        ->and($answer->abstentionThreshold)->toBe($threshold)
+        ->and($answer->probability)->toBe(0.73);
+})->with([
+    'no gate ran' => [[], Abstention::NotRequested, false, null],
+    'abstained' => [['low_confidence' => true, 'abstention' => 'abstained', 'abstention_threshold' => 0.9], Abstention::Abstained, true, 0.9],
+    'passed' => [['abstention' => 'passed', 'abstention_threshold' => 0.6], Abstention::Passed, false, 0.6],
+    'unevaluated' => [['abstention' => 'unevaluated', 'abstention_threshold' => 0.6], Abstention::Unevaluated, false, 0.6],
+    'integer threshold' => [['abstention' => 'passed', 'abstention_threshold' => 0], Abstention::Passed, false, 0.0],
+    'threshold of 1' => [['abstention' => 'abstained', 'abstention_threshold' => 1.0], Abstention::Abstained, true, 1.0],
+    'integer threshold of 1' => [['abstention' => 'abstained', 'abstention_threshold' => 1], Abstention::Abstained, true, 1.0],
+    'low_confidence alone' => [['low_confidence' => true], Abstention::Abstained, true, null],
+    'low_confidence with a threshold' => [['low_confidence' => true, 'abstention_threshold' => 0.8], Abstention::Abstained, true, 0.8],
+    'low_confidence false' => [['low_confidence' => false], Abstention::NotRequested, false, null],
+    'abstention wins over low_confidence' => [['low_confidence' => true, 'abstention' => 'passed', 'abstention_threshold' => 0.5], Abstention::Passed, false, 0.5],
+]);
+
+it('reads a gated answer that reports no gate verdict as Unevaluated, neither NotRequested nor Passed', function (array $gate, Abstention $abstention, bool $abstained): void {
+    $answer = (new SystemOneCodec)->decode(churnDecision()->withMinConfidence(0.6), okResponse([
+        'answers' => ['churn' => ['type' => 'noul', 'noul' => 0.73, ...$gate]],
+    ]))->get(Question::yesNo('churn', 'Does the customer threaten to cancel?'));
+
+    expect($answer->abstention)->toBe($abstention)
+        ->and($answer->abstained)->toBe($abstained)
+        ->and($answer->abstentionThreshold)->toBeNull();
+})->with([
+    'no gate fields' => [[], Abstention::Unevaluated, false],
+    'low_confidence false' => [['low_confidence' => false], Abstention::Unevaluated, false],
+    'low_confidence true' => [['low_confidence' => true], Abstention::Abstained, true],
+]);
+
+it('raises MalformedResponse for abstention fields of the wrong shape', function (array $gate, string $message): void {
+    expect(fn () => churnAnswerWith($gate))->toThrow(MalformedResponse::class, $message);
+})->with([
+    'unknown state' => [['abstention' => 'maybe'], "The answer for 'churn' has an unknown 'abstention' state: \"maybe\"."],
+    'state not a string' => [['abstention' => true], "The answer for 'churn' has an unknown 'abstention' state: true."],
+    'threshold a string' => [['abstention' => 'passed', 'abstention_threshold' => '0.5'], "The answer for 'churn' has a non-numeric 'abstention_threshold'."],
+    'threshold above 1' => [['abstention' => 'passed', 'abstention_threshold' => 1.5], "The answer for 'churn' has an 'abstention_threshold' outside [0, 1]: 1.5."],
+    'threshold below 0' => [['abstention' => 'passed', 'abstention_threshold' => -0.5], "The answer for 'churn' has an 'abstention_threshold' outside [0, 1]: -0.5."],
+    'low_confidence not a bool' => [['low_confidence' => 'yes'], "The answer for 'churn' has a non-boolean 'low_confidence'."],
+]);
+
+/** @param array<string, mixed> $root the response's root fields beside `answers` */
+function metaFrom(array $root, ?float $latencyMs = null): Meta
+{
+    return (new SystemOneCodec)->decode(churnDecision(), okResponse([
+        'answers' => ['churn' => ['type' => 'noul', 'noul' => 0.5]],
+        ...$root,
+    ]), $latencyMs)->meta;
+}
+
+it('reads the model, routing and token usage the server reported', function (): void {
+    $meta = metaFrom([
+        'model' => 'laya-rl-agent',
+        'usage' => ['input_tokens' => 57, 'output_tokens' => 3, 'state_tokens' => 22, 'truncated' => false],
+        'routing' => ['model' => 'english', 'repo' => '/somewhere', 'reason' => 'English Latin text', 'detection' => null],
+    ], 12.5);
+
+    expect($meta)->toEqual(new Meta(
+        model: 'laya-rl-agent',
+        checkpoint: 'english',
+        routingReason: 'English Latin text',
+        inputTokens: 57,
+        outputTokens: 3,
+        latencyMs: 12.5,
+    ));
+});
+
+it('leaves out what the server did not report, as Jev does with routing', function (array $root, Meta $meta): void {
+    expect(metaFrom($root))->toEqual($meta);
+})->with([
+    'nothing' => [[], new Meta],
+    'nulls' => [['model' => null, 'usage' => null, 'routing' => null], new Meta],
+    'usage only' => [['usage' => ['input_tokens' => 5, 'output_tokens' => 0]], new Meta(inputTokens: 5, outputTokens: 0)],
+    'routing without reason' => [['routing' => ['model' => 'english']], new Meta(checkpoint: 'english')],
+    'routing with null fields' => [['routing' => ['model' => null, 'reason' => null]], new Meta],
+    'usage with one count' => [['usage' => ['input_tokens' => 9]], new Meta(inputTokens: 9)],
+]);
+
+it('raises MalformedResponse for metadata of the wrong shape', function (array $root, string $message): void {
+    expect(fn () => metaFrom($root))->toThrow(MalformedResponse::class, $message);
+})->with([
+    'model not a string' => [['model' => 7], "The response's 'model' is not a string."],
+    'routing not an object' => [['routing' => 'english'], "The response's 'routing' is not an object."],
+    'routing a list' => [['routing' => ['english']], "The response's 'routing' is not an object."],
+    'routing model not a string' => [['routing' => ['model' => 1]], "The response's 'routing.model' is not a string."],
+    'routing reason not a string' => [['routing' => ['reason' => false]], "The response's 'routing.reason' is not a string."],
+    'usage not an object' => [['usage' => 74], "The response's 'usage' is not an object."],
+    'usage a list' => [['usage' => [1, 2]], "The response's 'usage' is not an object."],
+    'input tokens a string' => [['usage' => ['input_tokens' => '57']], "The response's 'usage.input_tokens' is not a non-negative integer."],
+    'input tokens negative' => [['usage' => ['input_tokens' => -1]], "The response's 'usage.input_tokens' is not a non-negative integer."],
+    'output tokens a float' => [['usage' => ['output_tokens' => 1.5]], "The response's 'usage.output_tokens' is not a non-negative integer."],
+]);
+
+/** @param string $root the response's root fields beside `answers`, as raw JSON members, so `12.0` stays a float */
+function metaFromJson(string $root): Meta
+{
+    return (new SystemOneCodec)->decode(
+        churnDecision(),
+        new Response(200, '{"answers": {"churn": {"type": "noul", "noul": 0.5}}, '.$root.'}'),
+    )->meta;
+}
+
+it('reads a whole-number token count written with a fraction, which is the same JSON number', function (string $usage, int $input, int $output): void {
+    $meta = metaFromJson('"usage": '.$usage);
+
+    expect($meta->inputTokens)->toBe($input)
+        ->and($meta->outputTokens)->toBe($output);
+})->with([
+    'zero fraction' => ['{"input_tokens": 12.0, "output_tokens": 0.0}', 12, 0],
+    'exponent' => ['{"input_tokens": 1e2, "output_tokens": 3E0}', 100, 3],
+    'negative zero' => ['{"input_tokens": -0.0, "output_tokens": 1}', 0, 1],
+]);
+
+it('still refuses token counts that are not whole non-negative numbers', function (string $usage, string $message): void {
+    expect(fn () => metaFromJson('"usage": '.$usage))->toThrow(MalformedResponse::class, $message);
+})->with([
+    'fractional' => ['{"input_tokens": 12.5}', "The response's 'usage.input_tokens' is not a non-negative integer."],
+    'negative whole float' => ['{"input_tokens": -1.0}', "The response's 'usage.input_tokens' is not a non-negative integer."],
+    'one past the largest int' => ['{"output_tokens": 9223372036854775808}', "The response's 'usage.output_tokens' is not a non-negative integer."],
+    'beyond an int' => ['{"output_tokens": 1e19}', "The response's 'usage.output_tokens' is not a non-negative integer."],
+    'infinite' => ['{"output_tokens": 1e400}', "The response's 'usage.output_tokens' is not a non-negative integer."],
+]);
+
+it('has no latency when decode() is not given one', function (): void {
+    expect(metaFrom(['model' => 'laya-rl-agent'])->latencyMs)->toBeNull();
+});
 
 it('keeps the raw body on a MalformedResponse for debugging', function (): void {
     try {
