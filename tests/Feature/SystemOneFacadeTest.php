@@ -12,7 +12,9 @@ use EarthlingOllie\SystemOneClassification\Exceptions\InvalidConfiguration;
 use EarthlingOllie\SystemOneClassification\Exceptions\MalformedResponse;
 use EarthlingOllie\SystemOneClassification\Laravel\Facades\SystemOne;
 use EarthlingOllie\SystemOneClassification\Laravel\SystemOneManager;
+use EarthlingOllie\SystemOneClassification\Result\Confidence;
 use EarthlingOllie\SystemOneClassification\Result\Verdict;
+use EarthlingOllie\SystemOneClassification\Tests\Fixtures\Enums\Department;
 use EarthlingOllie\SystemOneClassification\Tests\Support\ComposerManifest;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -82,6 +84,40 @@ it('applies the connection timeout', function (): void {
 
     expect($options)->toBeArray()->toHaveKey('timeout', 7.0);
 });
+
+/** The raw confidence a connection's answer to a choice question is tagged with. */
+function confidenceFrom(string $connection): Confidence
+{
+    $question = Question::choice('department', Department::class, 'Which department?');
+    Http::fake(['*' => Http::response(['answers' => ['department' => [
+        'type' => 'choice',
+        'choice' => 'billing',
+        'probabilities' => ['billing' => 0.9, 'technical' => 0.06, 'other' => 0.04],
+        'confidence' => 0.45,
+    ]]])]);
+
+    return SystemOne::connection($connection)->decide(Decision::about(Context::text('x'))->ask($question))
+        ->get($question)->confidence;
+}
+
+it('tags the raw confidence with the profile the connection names', function (string $profile): void {
+    config(['system-one.connections.other' => ['url' => 'http://other.test', 'profile' => $profile]]);
+
+    expect(confidenceFrom('other'))->toEqual(new Confidence(0.45, $profile));
+})->with(['laya', 'jev']);
+
+it('tags the raw confidence as laya when the connection names no profile', function (mixed $profile): void {
+    config(['system-one.connections.other' => ['url' => 'http://other.test', 'profile' => $profile]]);
+
+    expect(confidenceFrom('other'))->toEqual(new Confidence(0.45, 'laya'));
+})->with(['missing' => null, 'empty' => '']);
+
+it('rejects a profile it does not know', function (mixed $profile): void {
+    config(['system-one.connections.broken' => ['url' => 'http://x', 'profile' => $profile]]);
+
+    SystemOne::connection('broken');
+})->with(['unknown' => 'gpt', 'wrong case' => 'Jev', 'not a string' => 5])
+    ->throws(InvalidConfiguration::class, "System One connection 'broken' has a 'profile' that is not one of: laya, jev.");
 
 it('rejects an unknown connection name', function (): void {
     SystemOne::connection('nope');

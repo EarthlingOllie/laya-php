@@ -7,6 +7,7 @@ namespace EarthlingOllie\SystemOneClassification\Exceptions;
 use OutOfBoundsException;
 
 use function implode;
+use function in_array;
 
 /** Result::get() was given a question the decision did not ask. */
 final class UnknownQuestion extends OutOfBoundsException implements SystemOneException
@@ -21,9 +22,18 @@ final class UnknownQuestion extends OutOfBoundsException implements SystemOneExc
         return new self("The result has no answer for the question '{$key}': it was not part of the decision. Asked: {$keys}.");
     }
 
-    public static function otherQuestion(string $key): self
+    /**
+     * @param  non-empty-list<string>  $fields  what differs from the asked handle: 'class' or property names
+     */
+    public static function otherQuestion(string $key, array $fields): self
     {
-        return new self("The result's question '{$key}' is not the one passed to get(): it was asked with other instructions or settings, so the handle is from another decision.");
+        $message = "The result's question '{$key}' is not the one passed to get(): it differs in its ".implode(' and its ', $fields).', so the handle is from another decision.';
+
+        if (in_array('options', $fields, true)) {
+            $message .= " A choice question's options include each case's description, so one rebuilt with other descriptions (under another locale, say) asks another question: read the result with the handle the decision asked.";
+        }
+
+        return new self($message);
     }
 
     public static function otherType(string $key, string $held, string $expected): self

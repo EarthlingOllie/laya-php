@@ -23,6 +23,9 @@ return [
             // Seconds; empty means 30. CPU inference takes ~0.3-0.7 s per call; the first
             // call after a start can take longer.
             'timeout' => env('SYSTEM_ONE_TIMEOUT', 30),
+            // The model behind the URL: 'laya' or 'jev'. It tags each answer's raw `confidence`,
+            // which is not comparable across models. Unset or empty means 'laya'.
+            'profile' => env('SYSTEM_ONE_PROFILE', 'laya'),
         ],
     ],
 ];

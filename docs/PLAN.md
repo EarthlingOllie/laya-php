@@ -316,7 +316,22 @@ How the typing works:
 - **Enums drive the options.** `choice` and `score` take a `BackedEnum`
   class-string. Labels come from backing values, and descriptions come from a
   `#[Describe]` attribute on each case. A `score` enum must describe every case,
-  because Laya requires it.
+  because Laya requires it. As built in #4: `Question::choice()` returns
+  `Question\ChoiceQuestion<TEnum>`; an enum implementing `DescribesCases` is described
+  by `describe()` instead of the attribute, and a case with neither goes out as its bare
+  label (`null` criterion). Criteria always go out as a JSON object (the codec builds a
+  `stdClass`), so whole-number labels survive. A blank label or description, a non-backed class
+(an interface extending `BackedEnum` included),
+  an enum without cases, or a `#[Describe]` PHP cannot build (repeated, or wrong
+  arguments; PHP's `Error` is chained as the previous exception) is an `InvalidDecision`.
+- **Choice answers** (#4): `ChoiceAnswer<TEnum>` has `value`, `answerConfidence` (the
+  server's `answer_confidence`, or P(chosen) when it sends none, as Jev does),
+  `confidence` (a `Result\Confidence {value, profile}`, the profile coming from the
+  connection's `profile` config key), `distribution` (`Result\Distribution<TCase>`, every case once, in enum
+  order, read with `entries()`/`cases()`/`probabilityOf()`), `probabilityOf()` and
+  `isConfident()`. `Result\Probability::check()` is the one [0, 1] check (NAN refused).
+  An unknown label, a missing or extra probability, or a non-numeric confidence is a
+  `MalformedResponse`.
 - **Typed errors.** Every exception the package throws implements the
   `Exceptions\SystemOneException` marker (enforced by the architecture tests,
   including a scan of every `throw` in `src/`).
@@ -324,6 +339,10 @@ How the typing works:
     whole-number or repeated key, no questions, an unknown question type, and
     later a broken profile limit), always raised before anything is sent.
   - `UnknownQuestion`: `Result::get()` was given a handle the decision didn't ask.
+    Handles match by value, case descriptions included (they are what the model
+    reads), so a choice handle rebuilt under another locale is refused; the
+    message names the fields that differ. #10's fake and #12's cache key follow
+    the same identity.
   - `InvalidProbability`: a probability or threshold outside [0, 1], or a no
     threshold above the yes threshold.
   - `InvalidConfiguration`: `config/system-one.php` doesn't describe a usable
@@ -346,7 +365,11 @@ How the typing works:
   `SYSTEM_ONE_CONNECTION` (`local`); `local` takes `url` from `SYSTEM_ONE_URL`
   (`http://localhost:8000`), `api_key` from `SYSTEM_ONE_API_KEY` (empty means
   none) and `timeout` from `SYSTEM_ONE_TIMEOUT` (seconds; empty means 30).
-  `SystemOneManager` reads the config on every call, so runtime `config()`
+  Since #4 each connection has a `profile` (`'laya'` or `'jev'`; unset or empty
+  means `'laya'`, anything else is `InvalidConfiguration`; `local` takes it from
+  `SYSTEM_ONE_PROFILE`), which the manager
+  passes to `SystemOneCodec` to tag the raw `confidence`. #6 swaps the string
+  for a `ModelProfile`, keeping the config key. `SystemOneManager` reads the config on every call, so runtime `config()`
   changes apply.
 - A singleton is bound in the container and exposed through a `SystemOne`
   facade.

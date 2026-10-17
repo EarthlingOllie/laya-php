@@ -33,4 +33,9 @@ final class InvalidConfiguration extends InvalidArgumentException implements Sys
     {
         return new self("System One connection '{$name}' has a 'timeout' that is not a number of seconds.");
     }
+
+    public static function unknownProfile(string $name, string $profiles): self
+    {
+        return new self("System One connection '{$name}' has a 'profile' that is not one of: {$profiles}.");
+    }
 }

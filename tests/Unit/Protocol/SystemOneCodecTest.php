@@ -170,4 +170,4 @@ it('refuses a handle from another decision that reuses the key with other instru
     ]));
 
     $result->get(Question::yesNo('churn', 'Is the customer happy with the product?'));
-})->throws(UnknownQuestion::class, "The result's question 'churn' is not the one passed to get(): it was asked with other instructions or settings, so the handle is from another decision.");
+})->throws(UnknownQuestion::class, "The result's question 'churn' is not the one passed to get(): it differs in its instructions, so the handle is from another decision.");

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace EarthlingOllie\SystemOneClassification\Result\Answer;
 
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidProbability;
+use EarthlingOllie\SystemOneClassification\Result\Probability;
 use EarthlingOllie\SystemOneClassification\Result\Verdict;
 
 /** The answer to a yes/no question: the probability that the statement is true. */
@@ -13,9 +14,7 @@ final readonly class YesNoAnswer implements Answer
     /** @throws InvalidProbability when the probability is outside [0, 1] */
     public function __construct(public float $probability)
     {
-        if (! self::isUnitInterval($probability)) {
-            throw InvalidProbability::outOfRange('A probability', $probability);
-        }
+        Probability::check('A probability', $probability);
     }
 
     /**
@@ -25,9 +24,7 @@ final readonly class YesNoAnswer implements Answer
      */
     public function isYes(float $threshold = 0.5): bool
     {
-        self::checkThreshold('The threshold', $threshold);
-
-        return $this->probability >= $threshold;
+        return $this->probability >= Probability::check('The threshold', $threshold);
     }
 
     /**
@@ -38,8 +35,8 @@ final readonly class YesNoAnswer implements Answer
      */
     public function verdict(float $yes, float $no): Verdict
     {
-        self::checkThreshold('The yes threshold', $yes);
-        self::checkThreshold('The no threshold', $no);
+        Probability::check('The yes threshold', $yes);
+        Probability::check('The no threshold', $no);
 
         if ($no > $yes) {
             throw InvalidProbability::thresholdsCrossed($yes, $no);
@@ -50,17 +47,5 @@ final readonly class YesNoAnswer implements Answer
             $this->probability <= $no => Verdict::No,
             default => Verdict::Unsure,
         };
-    }
-
-    private static function checkThreshold(string $name, float $threshold): void
-    {
-        if (! self::isUnitInterval($threshold)) {
-            throw InvalidProbability::outOfRange($name, $threshold);
-        }
-    }
-
-    private static function isUnitInterval(float $value): bool
-    {
-        return $value >= 0.0 && $value <= 1.0;
     }
 }

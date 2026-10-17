@@ -13,6 +13,8 @@ use EarthlingOllie\SystemOneClassification\Transport\HttpTransport;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Http\Client\Factory;
 
+use function implode;
+use function in_array;
 use function is_array;
 use function is_numeric;
 use function is_string;
@@ -25,6 +27,9 @@ use function is_string;
  */
 final readonly class SystemOneManager
 {
+    /** The model profiles a connection can name; #6 turns each into a ModelProfile. */
+    private const array PROFILES = ['laya', 'jev'];
+
     public function __construct(
         private Repository $config,
         private Factory $http,
@@ -47,6 +52,7 @@ final readonly class SystemOneManager
         $url = $connection['url'] ?? null;
         $apiKey = $connection['api_key'] ?? null;
         $timeout = $connection['timeout'] ?? '';
+        $profile = $connection['profile'] ?? '';
 
         if (! is_string($url) || $url === '') {
             throw InvalidConfiguration::missingUrl($name);
@@ -65,9 +71,18 @@ final readonly class SystemOneManager
             throw InvalidConfiguration::invalidTimeout($name);
         }
 
+        // Like the timeout, an unset or empty profile means the default: Laya.
+        if ($profile === '') {
+            $profile = 'laya';
+        }
+
+        if (! in_array($profile, self::PROFILES, true)) {
+            throw InvalidConfiguration::unknownProfile($name, implode(', ', self::PROFILES));
+        }
+
         return new DecisionClient(
             new HttpTransport($this->http, $url, $apiKey, (float) $timeout),
-            new SystemOneCodec,
+            new SystemOneCodec($profile),
         );
     }
 
