@@ -82,7 +82,7 @@ function scoreAnswerTypes(Result $result): void
     assertType(Distribution::class.'<'.Urgency::class.'>', $result->get($urgency)->distribution);
     assertType('list<'.Urgency::class.'>', $result->get($urgency)->distribution->cases());
     assertType('list<array{case: '.Urgency::class.', probability: float}>', $result->get($urgency)->distribution->entries());
-    assertType('non-empty-list<array{case: '.Urgency::class.', value: int, description: string}>', $urgency->levels());
+    assertType('non-empty-list<array{case: '.Urgency::class.', value: int, description: string|null}>', $urgency->levels());
 
     // The enum comes back as itself: its cases and backing value need no cast.
     assertType('0|1|2|3', $result->get($urgency)->value->value);

@@ -6,9 +6,11 @@ use EarthlingOllie\SystemOneClassification\Domain\Context;
 use EarthlingOllie\SystemOneClassification\Domain\Decision;
 use EarthlingOllie\SystemOneClassification\Domain\Question;
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidConfiguration;
+use EarthlingOllie\SystemOneClassification\Exceptions\InvalidDecision;
 use EarthlingOllie\SystemOneClassification\Laravel\Facades\SystemOne;
 use EarthlingOllie\SystemOneClassification\Laravel\SystemOneServiceProvider;
 use EarthlingOllie\SystemOneClassification\Tests\Fixtures\Enums\Department;
+use EarthlingOllie\SystemOneClassification\Tests\Support\OptionsEnum;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\ServiceProvider;
@@ -51,6 +53,8 @@ it('points the local connection at http://localhost:8000 when SYSTEM_ONE_URL is 
         'SYSTEM_ONE_API_KEY' => null,
         'SYSTEM_ONE_TIMEOUT' => null,
         'SYSTEM_ONE_PROFILE' => null,
+        'SYSTEM_ONE_TOURNAMENT_GROUPING' => null,
+        'SYSTEM_ONE_MODELS' => null,
     ]);
 
     expect($config)->toBe([
@@ -61,6 +65,8 @@ it('points the local connection at http://localhost:8000 when SYSTEM_ONE_URL is 
                 'api_key' => null,
                 'timeout' => 30,
                 'profile' => 'laya',
+                'tournament_grouping' => false,
+                'models' => '',
             ],
         ],
     ]);
@@ -74,7 +80,10 @@ it('takes the local base URL, key and timeout from the environment', function ()
     ]);
 
     expect($config['connections'])->toBe([
-        'local' => ['url' => 'http://laya:8000', 'api_key' => 'secret', 'timeout' => '5', 'profile' => 'laya'],
+        'local' => [
+            'url' => 'http://laya:8000', 'api_key' => 'secret', 'timeout' => '5', 'profile' => 'laya',
+            'tournament_grouping' => false, 'models' => '',
+        ],
     ]);
 });
 
@@ -115,6 +124,30 @@ it('tags the raw confidence with the SYSTEM_ONE_PROFILE taken from the environme
     $answer = SystemOne::decide(Decision::about(Context::text('x'))->ask($department))->get($department);
 
     expect($answer->confidence->profile)->toBe('jev');
+});
+
+it('takes tournament grouping and extra models for the local connection from the environment', function (): void {
+    $local = systemOneConfigWith(['SYSTEM_ONE_TOURNAMENT_GROUPING' => 'true', 'SYSTEM_ONE_MODELS' => 'acme/a,acme/b'])['connections']['local'];
+
+    expect($local['tournament_grouping'])->toBeTrue()
+        ->and($local['models'])->toBe('acme/a,acme/b');
+});
+
+it('applies SYSTEM_ONE_TOURNAMENT_GROUPING and SYSTEM_ONE_MODELS taken from the environment', function (): void {
+    config(['system-one' => systemOneConfigWith([
+        'SYSTEM_ONE_URL' => 'http://laya.test',
+        'SYSTEM_ONE_PROFILE' => null,
+        'SYSTEM_ONE_TOURNAMENT_GROUPING' => '1',
+        'SYSTEM_ONE_MODELS' => 'acme/a, acme/b',
+    ])]);
+    Http::fake(['*' => Http::response(['answers' => ['churn' => ['type' => 'noul', 'noul' => 0.1]]])]);
+
+    SystemOne::decide(Decision::about(Context::text('x'))->ask(Question::yesNo('churn', 'Cancel?'))->withModel('acme/b'));
+
+    Http::assertSent(fn (Request $request): bool => $request->data()['model'] === 'acme/b');
+    expect(fn () => SystemOne::decide(Decision::about(Context::text('x'))
+        ->ask(Question::choice('label', OptionsEnum::withCases(256), 'Which?'))))
+        ->toThrow(InvalidDecision::class, 'more than the 255 the laya profile allows');
 });
 
 it('uses the 30 second timeout when SYSTEM_ONE_TIMEOUT is set but empty', function (string $value): void {

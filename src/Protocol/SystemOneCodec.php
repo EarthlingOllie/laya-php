@@ -15,6 +15,9 @@ use EarthlingOllie\SystemOneClassification\Exceptions\HostUnavailable;
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidDecision;
 use EarthlingOllie\SystemOneClassification\Exceptions\MalformedResponse;
 use EarthlingOllie\SystemOneClassification\Exceptions\RejectedByModel;
+use EarthlingOllie\SystemOneClassification\Model\LayaProfile;
+use EarthlingOllie\SystemOneClassification\Model\ModelProfile;
+use EarthlingOllie\SystemOneClassification\Model\ProfileLimits;
 use EarthlingOllie\SystemOneClassification\Result\Answer\Answer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\ChoiceAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\ScoreAnswer;
@@ -23,6 +26,7 @@ use EarthlingOllie\SystemOneClassification\Result\Confidence;
 use EarthlingOllie\SystemOneClassification\Result\Distribution;
 use EarthlingOllie\SystemOneClassification\Result\Result;
 use EarthlingOllie\SystemOneClassification\Transport\Response;
+use JsonException;
 use stdClass;
 
 use function array_column;
@@ -51,18 +55,21 @@ final readonly class SystemOneCodec
     public const string PATH = '/v1/systemone';
 
     /**
-     * @param  string  $profile  the model profile whose raw `confidence` values this codec reads;
-     *                           every decoded Confidence is tagged with it
+     * @param  ModelProfile  $profile  the model behind the connection: encode() checks every
+     *                                 decision against its limits, and every decoded
+     *                                 Confidence is tagged with its name
      */
-    public function __construct(private string $profile = 'laya') {}
+    public function __construct(private ModelProfile $profile = new LayaProfile) {}
 
     /**
-     * @return array{state: string, questions: array<string, array<string, mixed>>} choice criteria are a stdClass, so they always encode as a JSON object
+     * @return array{state: string, model?: string, questions: array<string, array<string, mixed>>} choice criteria are a stdClass, so they always encode as a JSON object; `model` only when the decision pins one
      *
-     * @throws InvalidDecision
+     * @throws InvalidDecision when the decision cannot be sent, or breaks a limit of the profile
      */
     public function encode(Decision $decision): array
     {
+        ProfileLimits::check($this->profile, $decision);
+
         $questions = [];
 
         foreach ($decision->questions() as $question) {
@@ -73,7 +80,23 @@ final readonly class SystemOneCodec
             throw InvalidDecision::noQuestions();
         }
 
-        return ['state' => $decision->context->text, 'questions' => $questions];
+        $body = ['state' => $decision->context->text];
+
+        if ($decision->model !== null) {
+            $body['model'] = $decision->model;
+        }
+
+        $body = [...$body, 'questions' => $questions];
+
+        // Encoded once here so a body the HTTP client could not encode fails as the package's
+        // own exception; only then are its parts encoded one by one to name the culprit.
+        if (self::jsonError($body) !== null) {
+            [$part, $error] = self::notUtf8($body);
+
+            throw InvalidDecision::notUtf8($part, $error);
+        }
+
+        return $body;
     }
 
     /**
@@ -122,6 +145,51 @@ final readonly class SystemOneCodec
         }
 
         return new Result($decoded);
+    }
+
+    /**
+     * JSON carries only UTF-8, so text that is not would fail in the HTTP client's own
+     * json_encode(), with an exception that is not the package's. Every piece of a request is
+     * a string, a list or object of strings, or null, so invalid UTF-8 is the only way it can
+     * fail to encode.
+     *
+     * @return ?JsonException why the value cannot be encoded, or null when it can
+     */
+    private static function jsonError(mixed $value): ?JsonException
+    {
+        try {
+            json_encode($value, JSON_THROW_ON_ERROR);
+        } catch (JsonException $e) {
+            return $e;
+        }
+
+        return null;
+    }
+
+    /**
+     * The part of a body that json_encode() refused, as a message names it, and why: the state,
+     * a question by its key, or else the pinned model, the only other text in it.
+     *
+     * @param  array{state: string, model?: string, questions: array<string, array<string, mixed>>}  $body
+     * @return array{string, ?JsonException}
+     */
+    private static function notUtf8(array $body): array
+    {
+        $error = self::jsonError($body['state']);
+
+        if ($error !== null) {
+            return ['The context text', $error];
+        }
+
+        foreach ($body['questions'] as $key => $request) {
+            $error = self::jsonError($request);
+
+            if ($error !== null) {
+                return ["The text of question '{$key}'", $error];
+            }
+        }
+
+        return ['The pinned model', self::jsonError($body['model'] ?? null)];
     }
 
     /**
@@ -329,7 +397,9 @@ final readonly class SystemOneCodec
 
     /**
      * The legend must name every level, by index, with the description that was sent: a
-     * mismatch means the server scored some other scale.
+     * mismatch means the server scored some other scale. A level sent without a description
+     * (null, where the profile allows it) has nothing to compare, so its entry may be null,
+     * any text, or missing.
      *
      * @template TEnum of BackedEnum
      *
@@ -346,6 +416,15 @@ final readonly class SystemOneCodec
 
         $expected = $question->criteria();
         $sorted = $legend;
+
+        foreach ($expected as $index => $description) {
+            $entry = $sorted[$index] ?? null;
+
+            if ($description === null && ($entry === null || is_string($entry))) {
+                $sorted[$index] = null;
+            }
+        }
+
         ksort($sorted);
 
         if ($sorted !== $expected) {
@@ -407,7 +486,7 @@ final readonly class SystemOneCodec
     }
 
     /**
-     * The model's raw `confidence`, tagged with this codec's profile.
+     * The model's raw `confidence`, tagged with this codec's profile's name.
      *
      * @param  array<mixed>  $answer
      */
@@ -419,7 +498,7 @@ final readonly class SystemOneCodec
             throw MalformedResponse::because("The answer for '{$key}' has no numeric 'confidence'.", $body);
         }
 
-        return new Confidence((float) $confidence, $this->profile);
+        return new Confidence((float) $confidence, $this->profile->name);
     }
 
     /**

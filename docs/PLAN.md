@@ -315,8 +315,8 @@ How the typing works:
   integer array key and the questions would go out as a JSON list).
 - **Enums drive the options.** `choice` and `score` take a `BackedEnum`
   class-string. Labels come from backing values, and descriptions come from a
-  `#[Describe]` attribute on each case. A `score` enum must describe every case,
-  because Laya requires it. As built in #4: `Question::choice()` returns
+  `#[Describe]` attribute on each case. On Laya a `score` enum must describe every
+  case, because Laya requires it (the profile checks it since #6). As built in #4: `Question::choice()` returns
   `Question\ChoiceQuestion<TEnum>`; an enum implementing `DescribesCases` is described
   by `describe()` instead of the attribute, and a case with neither goes out as its bare
   label (`null` criterion). Criteria always go out as a JSON object (the codec builds a
@@ -336,9 +336,10 @@ How the typing works:
   over an int-backed enum (a string-backed one is refused at its first case). `levels()`
   lists `{case, value, description}` sorted by backing value, whatever the declaration
   order, and goes out as `criteria`: a list of descriptions, index 0 first, because
-  laya-serve knows levels only by index. Every level must be described (`DescribesCases`
-  or `#[Describe]`, read by `Question\CaseDescription` for both enum question types); a
-  missing or blank description is an `InvalidDecision` naming the case.
+  laya-serve knows levels only by index. Levels are described by `DescribesCases`
+  or `#[Describe]`, read by `Question\CaseDescription` for both enum question types; a
+  blank description is an `InvalidDecision` naming the case, and since #6 a missing one
+  is `null`, refused before sending by a profile that requires descriptions (Laya).
 - **Score answers** (#5): `ScoreAnswer<TEnum>` has `value` (the most probable level; the
   lowest of equally likely ones, since the server sends none for a score), `expected`, and
   `answerConfidence`, `confidence`, `distribution` (in level order), `probabilityOf()` and
@@ -352,12 +353,35 @@ How the typing works:
   the index it was sent with (key order aside); any other legend, a `score` outside
   0..n-1, all-zero probabilities, or a missing or extra probability is a
   `MalformedResponse` (probability errors name the level behind the index).
+- **Model profiles** (#6): `Model\ModelProfile` has `name` (which tags every raw
+  `confidence`), `maxChoiceOptions`, `requiresScoreDescriptions` and `models()`.
+  `LayaProfile`: 100 options (255 with `tournamentGrouping`), descriptions required, and
+  `LayaProfile::MODELS` (laya-serve's checkpoints and aliases, as its unknown-model 422
+  lists them) plus any `extraModels`, matched in any case as laya-serve does (it trims and
+  lowercases a name before looking it up); `acceptsModel()` holds that rule. `JevProfile`: 255 options, descriptions optional, and
+  only the `models` its connection lists, matched exactly, because Jev's are not in anything recorded yet
+  (so `withModel()` is refused on a Jev connection that lists none). The contract tests
+  read the cap and the model list out of the recorded 413 and 422 messages.
+  `SystemOneCodec::encode()` runs `Model\ProfileLimits::check()` first: a pinned model
+  the profile does not accept, a choice over more options than it allows, or (when it
+  requires them) an undescribed score level is an `InvalidDecision` naming the question
+  key and the limit, so nothing is sent. `ScoreQuestion` therefore keeps an undescribed
+  level as a `null` description (and criterion) instead of refusing it; a blank one is
+  still refused when the question is built. `Decision::withModel()` returns a new
+  decision whose `model` goes out as the wire's `model` (left out when none is pinned); a
+  blank model is refused at once. The codec also encodes the state and each question's
+  request up front, so text that is not valid UTF-8 is an `InvalidDecision` naming the
+  context or the question key (the `JsonException` chained), not the HTTP client's
+  exception. Laya's other 413 limits (64 questions, 32 score levels, 512 options across
+  questions, 50,000 state characters) are not in the profile yet: Jev's values for them
+  are unknown.
 - **Typed errors.** Every exception the package throws implements the
   `Exceptions\SystemOneException` marker (enforced by the architecture tests,
   including a scan of every `throw` in `src/`).
   - `InvalidDecision`: the decision can't be sent (blank text or key, a
-    whole-number or repeated key, no questions, an unknown question type, and
-    later a broken profile limit), always raised before anything is sent.
+    whole-number or repeated key, no questions, an unknown question type, text
+    that is not valid UTF-8, or a broken profile limit), always raised before
+    anything is sent.
   - `UnknownQuestion`: `Result::get()` was given a handle the decision didn't ask.
     Handles match by value, case descriptions included (they are what the model
     reads), so a choice handle rebuilt under another locale is refused; the
@@ -387,9 +411,13 @@ How the typing works:
   none) and `timeout` from `SYSTEM_ONE_TIMEOUT` (seconds; empty means 30).
   Since #4 each connection has a `profile` (`'laya'` or `'jev'`; unset or empty
   means `'laya'`, anything else is `InvalidConfiguration`; `local` takes it from
-  `SYSTEM_ONE_PROFILE`), which the manager
-  passes to `SystemOneCodec` to tag the raw `confidence`. #6 swaps the string
-  for a `ModelProfile`, keeping the config key. `SystemOneManager` reads the config on every call, so runtime `config()`
+  `SYSTEM_ONE_PROFILE`). Since #6 the manager builds a `Model\LayaProfile` or
+  `Model\JevProfile` from it and hands it to `SystemOneCodec`, with two more keys:
+  `tournament_grouping` (Laya only; `SYSTEM_ONE_TOURNAMENT_GROUPING`; a bool or an
+  env string such as `'1'`/`'true'`/`'0'`/`''`) and `models` (`SYSTEM_ONE_MODELS`; a
+  list of names or a comma-separated string: the `model` values the host accepts
+  beyond the profile's own). Anything else in either is `InvalidConfiguration`.
+  `SystemOneManager` reads the config on every call, so runtime `config()`
   changes apply.
 - A singleton is bound in the container and exposed through a `SystemOne`
   facade.
@@ -460,7 +488,7 @@ src/
   Domain/        Context, Decision, Question (factory), Question/{QuestionHandle,QuestionKey,
                  Choice,Score,YesNoQuestion}, Describe attribute
   Result/        Result, ResultSet, Answer/{Answer,Choice,Score,YesNoAnswer}, Distribution, Verdict, Meta
-  Model/         ModelProfile, LayaProfile, JevProfile
+  Model/         ModelProfile, LayaProfile, JevProfile, ProfileLimits
   Protocol/      SystemOneCodec (request/response mapping)
   Transport/     Transport, HttpTransport, Response, Redactor, FakeTransport
   Client/        DecisionClient (one per connection)

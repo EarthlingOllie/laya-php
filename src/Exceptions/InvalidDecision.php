@@ -7,8 +7,10 @@ namespace EarthlingOllie\SystemOneClassification\Exceptions;
 use BackedEnum;
 use Error;
 use InvalidArgumentException;
+use JsonException;
 
 use function get_debug_type;
+use function implode;
 
 /** A decision or question that cannot be sent, caught before anything goes over the wire. */
 final class InvalidDecision extends InvalidArgumentException implements SystemOneException
@@ -83,11 +85,11 @@ final class InvalidDecision extends InvalidArgumentException implements SystemOn
         return new self("Score question '{$key}' has no levels: {$enum} has no cases.");
     }
 
-    public static function undescribedLevel(string $key, BackedEnum $case): self
+    public static function undescribedLevel(string $key, BackedEnum $case, string $profile): self
     {
         $enum = $case::class;
 
-        return new self("Level {$case->value} of score question '{$key}' has no description: give {$enum}::{$case->name} a #[Describe], because Laya rejects a score level without one.");
+        return new self("Level {$case->value} of score question '{$key}' has no description, which the {$profile} profile requires of every score level: give {$enum}::{$case->name} a #[Describe].");
     }
 
     public static function blankLevelDescription(string $key, BackedEnum $case): self
@@ -105,6 +107,41 @@ final class InvalidDecision extends InvalidArgumentException implements SystemOn
     public static function noQuestions(): self
     {
         return new self('The decision asks no questions; add one with ask().');
+    }
+
+    public static function tooManyOptions(string $key, int $options, int $limit, string $profile): self
+    {
+        return new self("Choice question '{$key}' has {$options} options, more than the {$limit} the {$profile} profile allows per choice question.");
+    }
+
+    public static function blankModel(): self
+    {
+        return new self('A model must not be blank; leave it out to let the server choose.');
+    }
+
+    public static function paddedModel(string $model, string $trimmed): self
+    {
+        return new self("Model '{$model}' has whitespace around it; pin '{$trimmed}'.");
+    }
+
+    /**
+     * @param  list<string>  $accepted
+     */
+    public static function unacceptedModel(string $model, string $profile, array $accepted): self
+    {
+        if ($accepted === []) {
+            return new self("The decision pins model '{$model}', but the {$profile} profile accepts no model values; list the host's in the connection's 'models' config, or leave the model out.");
+        }
+
+        return new self("The decision pins model '{$model}', which the {$profile} profile does not accept; use one of: ".implode(', ', $accepted).'.');
+    }
+
+    /**
+     * @param  string  $part  what is not UTF-8, as the message names it ("The context text")
+     */
+    public static function notUtf8(string $part, ?JsonException $previous): self
+    {
+        return new self("{$part} is not valid UTF-8, which JSON requires.", previous: $previous);
     }
 
     public static function unsupportedQuestion(object $question): self

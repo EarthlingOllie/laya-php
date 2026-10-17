@@ -7,6 +7,7 @@ use EarthlingOllie\SystemOneClassification\Domain\Decision;
 use EarthlingOllie\SystemOneClassification\Domain\Question;
 use EarthlingOllie\SystemOneClassification\Domain\Question\ChoiceQuestion;
 use EarthlingOllie\SystemOneClassification\Exceptions\MalformedResponse;
+use EarthlingOllie\SystemOneClassification\Model\JevProfile;
 use EarthlingOllie\SystemOneClassification\Protocol\SystemOneCodec;
 use EarthlingOllie\SystemOneClassification\Result\Answer\ChoiceAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Confidence;
@@ -93,7 +94,7 @@ it('decodes the chosen case, both confidences and the distribution', function ()
 });
 
 it('tags the raw confidence with the profile the codec was built for', function (): void {
-    expect(decodeChoice(departmentQuestion(), departmentAnswer(), new SystemOneCodec('jev'))->confidence)
+    expect(decodeChoice(departmentQuestion(), departmentAnswer(), new SystemOneCodec(new JevProfile))->confidence)
         ->toEqual(new Confidence(0.4534, 'jev'));
 });
 

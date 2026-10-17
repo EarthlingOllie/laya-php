@@ -77,3 +77,15 @@ it('sends nothing for a question type the wire format does not know', function (
         $http->assertNothingSent();
     }
 })->throws(InvalidDecision::class, 'The wire format has no question type for '.QuestionHandle::class.'@anonymous.');
+
+it('sends nothing for a context that is not valid UTF-8', function (): void {
+    $http = new Factory;
+    $http->fake();
+
+    try {
+        (new DecisionClient(new HttpTransport($http, 'http://laya.test'), new SystemOneCodec))
+            ->decide(Decision::about(Context::text("Billed tw\xB1ce"))->ask(Question::yesNo('churn', 'Cancel?')));
+    } finally {
+        $http->assertNothingSent();
+    }
+})->throws(InvalidDecision::class, 'The context text is not valid UTF-8, which JSON requires.');

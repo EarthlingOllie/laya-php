@@ -38,4 +38,14 @@ final class InvalidConfiguration extends InvalidArgumentException implements Sys
     {
         return new self("System One connection '{$name}' has a 'profile' that is not one of: {$profiles}.");
     }
+
+    public static function invalidTournamentGrouping(string $name): self
+    {
+        return new self("System One connection '{$name}' has a 'tournament_grouping' that is not true or false.");
+    }
+
+    public static function invalidModels(string $name): self
+    {
+        return new self("System One connection '{$name}' has 'models' that are not a list of model names.");
+    }
 }

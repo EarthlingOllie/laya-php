@@ -16,6 +16,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Route;
 use Workbench\App\Enums\Department;
+use Workbench\App\Enums\Topic;
 use Workbench\App\Enums\Urgency;
 
 /*
@@ -41,6 +42,7 @@ Route::get('/', function (Application $app): string {
             <p><a href="/decide">Ask one yes/no question</a></p>
             <p><a href="/choose">Ask one choice question</a></p>
             <p><a href="/score">Ask one score question</a></p>
+            <p><a href="/limits">Ask a choice over 101 topics</a> (more than Laya allows)</p>
         </body>
         </html>
         HTML;
@@ -57,6 +59,23 @@ $ticket = static function (Request $request): string {
     return is_string($text) && trim($text) !== ''
         ? $text
         : 'Hi, we were billed twice for March. Please refund the duplicate charge today or we will cancel our plan.';
+};
+
+/*
+ * The checkpoint every question page pins with Decision::withModel(): a non-blank ?model=,
+ * or null to let the server choose. The connection's profile decides which values are valid.
+ */
+$model = static function (Request $request): ?string {
+    $model = $request->query('model');
+
+    return is_string($model) && trim($model) !== '' ? $model : null;
+};
+
+/* The decision about $text, pinned to $model when one is given. */
+$decision = static function (string $text, ?string $model): Decision {
+    $decision = Decision::about(Context::text($text));
+
+    return $model === null ? $decision : $decision->withModel($model);
 };
 
 /*
@@ -83,19 +102,28 @@ $failure = static function (SystemOneException $exception): array {
         HTML];
 };
 
-/* The page around a question's outcome; every argument is already escaped. */
-$page = static fn (string $title, string $text, string $question, string $outcome): string => <<<HTML
-    <!doctype html>
-    <html lang="en">
-    <head><meta charset="utf-8"><title>System One: {$title}</title></head>
-    <body style="font-family: system-ui, sans-serif; margin: 3rem; max-width: 44rem;">
-        <h1>{$title}</h1>
-        <p><strong>Text:</strong> {$text}</p>
-        <p><strong>Question:</strong> {$question}</p>
-        {$outcome}
-    </body>
-    </html>
-    HTML;
+/*
+ * The page around a question's outcome. Every argument but $model is already escaped; $model
+ * is the pinned checkpoint, or null when the server chooses.
+ */
+$page = static function (string $title, string $text, string $question, ?string $model, string $outcome): string {
+    $pinned = e($model ?? '');
+    $shown = $model === null ? 'chosen by the server' : $pinned;
+
+    return <<<HTML
+        <!doctype html>
+        <html lang="en">
+        <head><meta charset="utf-8"><title>System One: {$title}</title></head>
+        <body style="font-family: system-ui, sans-serif; margin: 3rem; max-width: 44rem;">
+            <h1>{$title}</h1>
+            <p><strong>Text:</strong> {$text}</p>
+            <p><strong>Question:</strong> {$question}</p>
+            <p id="model" data-model="{$pinned}"><strong>Model:</strong> {$shown}</p>
+            {$outcome}
+        </body>
+        </html>
+        HTML;
+};
 
 /*
  * One yes/no question, end to end: SystemOne::decide() against the default connection
@@ -106,13 +134,14 @@ $page = static fn (string $title, string $text, string $question, string $outcom
  * use another server or a key, add SYSTEM_ONE_URL / SYSTEM_ONE_API_KEY to the `env:`
  * list in testbench.yaml.
  */
-Route::get('/decide', function (Request $request) use ($ticket, $failure, $page): Response {
+Route::get('/decide', function (Request $request) use ($ticket, $model, $decision, $failure, $page): Response {
     $text = $ticket($request);
+    $pinned = $model($request);
     $churn = Question::yesNo('churn', 'Does the customer threaten to cancel or leave?');
     $status = 200;
 
     try {
-        $answer = SystemOne::decide(Decision::about(Context::text($text))->ask($churn))->get($churn);
+        $answer = SystemOne::decide($decision($text, $pinned)->ask($churn))->get($churn);
         $probability = e((string) $answer->probability);
         $verdict = e($answer->verdict(yes: 0.8, no: 0.2)->name);
         $isYes = $answer->isYes() ? 'yes' : 'no';
@@ -127,20 +156,21 @@ Route::get('/decide', function (Request $request) use ($ticket, $failure, $page)
         [$status, $outcome] = $failure($exception);
     }
 
-    return new Response($page('One yes/no question', e($text), e($churn->instructions), $outcome), $status);
+    return new Response($page('One yes/no question', e($text), e($churn->instructions), $pinned, $outcome), $status);
 });
 
 /*
  * One choice question over Workbench\App\Enums\Department: the chosen case, both
  * confidences, isConfident(0.6) and the distribution in the enum's order.
  */
-Route::get('/choose', function (Request $request) use ($ticket, $failure, $page): Response {
+Route::get('/choose', function (Request $request) use ($ticket, $model, $decision, $failure, $page): Response {
     $text = $ticket($request);
+    $pinned = $model($request);
     $department = Question::choice('department', Department::class, 'Which department should handle this?');
     $status = 200;
 
     try {
-        $answer = SystemOne::decide(Decision::about(Context::text($text))->ask($department))->get($department);
+        $answer = SystemOne::decide($decision($text, $pinned)->ask($department))->get($department);
         $value = e($answer->value->name);
         $answerConfidence = e((string) $answer->answerConfidence);
         $confidence = e((string) $answer->confidence->value);
@@ -167,7 +197,7 @@ Route::get('/choose', function (Request $request) use ($ticket, $failure, $page)
         [$status, $outcome] = $failure($exception);
     }
 
-    return new Response($page('One choice question', e($text), e($department->instructions), $outcome), $status);
+    return new Response($page('One choice question', e($text), e($department->instructions), $pinned, $outcome), $status);
 });
 
 /*
@@ -175,13 +205,14 @@ Route::get('/choose', function (Request $request) use ($ticket, $failure, $page)
  * level (on the backing values), both confidences, isConfident(0.6) and the distribution
  * in level order.
  */
-Route::get('/score', function (Request $request) use ($ticket, $failure, $page): Response {
+Route::get('/score', function (Request $request) use ($ticket, $model, $decision, $failure, $page): Response {
     $text = $ticket($request);
+    $pinned = $model($request);
     $urgency = Question::score('urgency', Urgency::class, 'How urgent is this?');
     $status = 200;
 
     try {
-        $answer = SystemOne::decide(Decision::about(Context::text($text))->ask($urgency))->get($urgency);
+        $answer = SystemOne::decide($decision($text, $pinned)->ask($urgency))->get($urgency);
         $value = e($answer->value->name);
         $expected = e((string) $answer->expected);
         $answerConfidence = e((string) $answer->answerConfidence);
@@ -211,5 +242,46 @@ Route::get('/score', function (Request $request) use ($ticket, $failure, $page):
         [$status, $outcome] = $failure($exception);
     }
 
-    return new Response($page('One score question', e($text), e($urgency->instructions), $outcome), $status);
+    return new Response($page('One score question', e($text), e($urgency->instructions), $pinned, $outcome), $status);
+});
+
+/*
+ * One choice question over Workbench\App\Enums\Topic's 101 cases, one more than the laya
+ * profile allows: on a laya connection the decision fails with InvalidDecision before anything
+ * is sent; with SYSTEM_ONE_PROFILE=jev, or SYSTEM_ONE_TOURNAMENT_GROUPING=true for a Laya
+ * server started with LAYA_TOURNAMENT_GROUP, it is sent. The page names the profile and the
+ * tournament grouping the default connection's config picks.
+ */
+Route::get('/limits', function (Request $request) use ($ticket, $model, $decision, $failure, $page): Response {
+    $text = $ticket($request);
+    $pinned = $model($request);
+    $topic = Question::choice('topic', Topic::class, 'Which topic is this about?');
+    $connection = config('system-one.default');
+    $settings = config('system-one.connections.'.(is_string($connection) ? $connection : ''));
+    $settings = is_array($settings) ? $settings : [];
+    // Shown as the config states them (the manager refuses anything it cannot read).
+    $profile = $settings['profile'] ?? null;
+    $profile = e(is_string($profile) && $profile !== '' ? $profile : 'laya');
+    $grouping = filter_var($settings['tournament_grouping'] ?? false, FILTER_VALIDATE_BOOL) ? 'yes' : 'no';
+    $options = count($topic->options());
+    $status = 200;
+
+    try {
+        $answer = SystemOne::decide($decision($text, $pinned)->ask($topic))->get($topic);
+        $value = e($answer->value->name);
+        $answerConfidence = e((string) $answer->answerConfidence);
+        $outcome = <<<HTML
+            <dl id="answer" data-value="{$value}" data-answer-confidence="{$answerConfidence}" data-options="{$options}">
+                <dt>value</dt><dd>Topic::{$value}</dd>
+                <dt>answerConfidence</dt><dd>{$answerConfidence}</dd>
+                <dt>options sent</dt><dd>{$options}</dd>
+            </dl>
+            HTML;
+    } catch (SystemOneException $exception) {
+        [$status, $outcome] = $failure($exception);
+    }
+
+    $outcome = "<p id=\"profile\" data-profile=\"{$profile}\" data-tournament-grouping=\"{$grouping}\"><strong>Profile:</strong> {$profile}, tournament grouping: {$grouping}</p>{$outcome}";
+
+    return new Response($page("A choice over {$options} topics", e($text), e($topic->instructions), $pinned, $outcome), $status);
 });

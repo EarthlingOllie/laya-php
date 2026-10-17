@@ -7,11 +7,13 @@ use EarthlingOllie\SystemOneClassification\Domain\Decision;
 use EarthlingOllie\SystemOneClassification\Domain\Question;
 use EarthlingOllie\SystemOneClassification\Domain\Question\ScoreQuestion;
 use EarthlingOllie\SystemOneClassification\Exceptions\MalformedResponse;
+use EarthlingOllie\SystemOneClassification\Model\JevProfile;
 use EarthlingOllie\SystemOneClassification\Protocol\SystemOneCodec;
 use EarthlingOllie\SystemOneClassification\Result\Answer\ScoreAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Confidence;
 use EarthlingOllie\SystemOneClassification\Tests\Fixtures\Enums\Department;
 use EarthlingOllie\SystemOneClassification\Tests\Fixtures\Enums\Severity;
+use EarthlingOllie\SystemOneClassification\Tests\Fixtures\Enums\UndescribedLevel;
 use EarthlingOllie\SystemOneClassification\Tests\Fixtures\Enums\Urgency;
 use EarthlingOllie\SystemOneClassification\Transport\Response;
 
@@ -114,7 +116,7 @@ it('decodes the most likely level, the expected level, both confidences and the 
 });
 
 it('tags the raw confidence with the profile the codec was built for', function (): void {
-    expect(decodeScore(urgencyQuestion(), urgencyAnswer(), new SystemOneCodec('jev'))->confidence)
+    expect(decodeScore(urgencyQuestion(), urgencyAnswer(), new SystemOneCodec(new JevProfile))->confidence)
         ->toEqual(new Confidence(0.3043, 'jev'));
 });
 
@@ -200,6 +202,42 @@ it('accepts integer numbers', function (): void {
         ->and($answer->confidence->value)->toBe(1.0)
         ->and($answer->probabilityOf(Urgency::Critical))->toBe(1.0);
 });
+
+/*
+ * Review finding: a level sent without a description (a profile that allows it, such as Jev)
+ * goes out as null, and nothing recorded shows what a server puts in the legend for it. Only
+ * the descriptions that were sent must come back; an undescribed level's entry may be null,
+ * any text, or missing.
+ */
+function undescribedAnswer(array $legend): array
+{
+    return [
+        'type' => 'score', 'score' => 0.5, 'legend' => $legend, 'confidence' => 0.2,
+        'probabilities' => ['0' => 0.6, '1' => 0.4],
+    ];
+}
+
+it('accepts any legend entry for a level that was sent without a description', function (array $legend): void {
+    $question = Question::score('health', UndescribedLevel::class, 'How healthy?');
+
+    expect(decodeScore($question, undescribedAnswer($legend), new SystemOneCodec(new JevProfile))->value)->toBe(UndescribedLevel::Fine);
+})->with([
+    'null, as sent' => [['0' => 'fine', '1' => null]],
+    'text of its own' => [['0' => 'fine', '1' => 'level 1']],
+    'left out' => [['0' => 'fine']],
+]);
+
+it('still checks the described levels and the indexes of a legend with an undescribed level', function (array $legend): void {
+    $question = Question::score('health', UndescribedLevel::class, 'How healthy?');
+
+    expect(fn () => decodeScore($question, undescribedAnswer($legend), new SystemOneCodec(new JevProfile)))
+        ->toThrow(MalformedResponse::class, "The answer for 'health' has a legend that does not match the levels of ".UndescribedLevel::class.': expected {"0":"fine","1":null}');
+})->with([
+    'another description' => [['0' => 'good', '1' => null]],
+    'a described level left out' => [['1' => null]],
+    'an extra index' => [['0' => 'fine', '1' => null, '2' => 'worse']],
+    'a non-text entry' => [['0' => 'fine', '1' => 5]],
+]);
 
 it('raises MalformedResponse for a score answer that does not match the protocol', function (array $overrides, string $message): void {
     try {

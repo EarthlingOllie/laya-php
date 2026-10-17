@@ -19,8 +19,9 @@ use function usort;
  * Rate on an ordinal scale, where the levels are the cases of an int-backed enum (Laya's `score`).
  *
  * The backing values order the levels, lowest first, whatever order the cases are declared
- * in. Every level needs a description (Laya rejects one without), from DescribesCases when the
- * enum implements it, otherwise from a #[Describe] attribute on the case. Build it with
+ * in. A level's description comes from DescribesCases when the enum implements it, otherwise
+ * from a #[Describe] attribute on the case. Whether every level must have one is up to the
+ * model (Laya: yes, Jev: no): the connection's profile checks it before sending. Build it with
  * Question::score().
  *
  * @template TEnum of BackedEnum
@@ -32,15 +33,15 @@ final readonly class ScoreQuestion implements QuestionHandle
     /** @var non-empty-string */
     public string $key;
 
-    /** @var non-empty-list<array{case: TEnum, value: int, description: string}> */
+    /** @var non-empty-list<array{case: TEnum, value: int, description: ?string}> */
     private array $levels;
 
     /**
      * @param  class-string<TEnum>  $enum  an int-backed enum
      *
      * @throws InvalidDecision when the key or instructions are invalid, the class is not an
-     *                         int-backed enum, the enum has no cases, or a case has no
-     *                         description, a blank one, or a #[Describe] PHP cannot build
+     *                         int-backed enum, the enum has no cases, or a case has a blank
+     *                         description or a #[Describe] PHP cannot build
      */
     public function __construct(string $key, public string $enum, public string $instructions)
     {
@@ -76,9 +77,10 @@ final readonly class ScoreQuestion implements QuestionHandle
     }
 
     /**
-     * Every level with its backing value and description, lowest backing value first.
+     * Every level with its backing value and description (null when it has none), lowest
+     * backing value first.
      *
-     * @return non-empty-list<array{case: TEnum, value: int, description: string}>
+     * @return non-empty-list<array{case: TEnum, value: int, description: ?string}>
      */
     public function levels(): array
     {
@@ -89,7 +91,7 @@ final readonly class ScoreQuestion implements QuestionHandle
      * The level descriptions, lowest level first: what goes out as `criteria`, since the
      * server knows levels only by index, and what the answer's `legend` must give back.
      *
-     * @return non-empty-list<string>
+     * @return non-empty-list<?string>
      */
     public function criteria(): array
     {
@@ -101,15 +103,11 @@ final readonly class ScoreQuestion implements QuestionHandle
         return ScoreAnswer::class;
     }
 
-    private static function describe(string $key, BackedEnum $case): string
+    private static function describe(string $key, BackedEnum $case): ?string
     {
         $description = CaseDescription::of($case, "Level {$case->value} of score question '{$key}'");
 
-        if ($description === null) {
-            throw InvalidDecision::undescribedLevel($key, $case);
-        }
-
-        if (trim($description) === '') {
+        if ($description !== null && trim($description) === '') {
             throw InvalidDecision::blankLevelDescription($key, $case);
         }
 

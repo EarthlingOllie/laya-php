@@ -80,10 +80,16 @@ it('rejects an enum with no cases', function (): void {
     Question::score('nothing', NoLevels::class, 'How much?');
 })->throws(InvalidDecision::class, "Score question 'nothing' has no levels: ".NoLevels::class.' has no cases.');
 
-// Laya answers a score question with an undescribed level with a 422; catch it before sending.
-it('rejects a level without a description, naming the case', function (): void {
-    Question::score('health', UndescribedLevel::class, 'How healthy?');
-})->throws(InvalidDecision::class, "Level 1 of score question 'health' has no description: give ".UndescribedLevel::class.'::Bad a #[Describe], because Laya rejects a score level without one.');
+// Whether a level may go undescribed is the profile's call (Laya: no, Jev: yes), checked
+// before sending; see ProfileLimitsTest.
+it('keeps a level without a description as a null description and criterion', function (): void {
+    $question = Question::score('health', UndescribedLevel::class, 'How healthy?');
+
+    expect($question->levels())->toBe([
+        ['case' => UndescribedLevel::Fine, 'value' => 0, 'description' => 'fine'],
+        ['case' => UndescribedLevel::Bad, 'value' => 1, 'description' => null],
+    ])->and($question->criteria())->toBe(['fine', null]);
+});
 
 it('rejects a blank description, from the attribute or the interface, naming the case', function (string $enum, string $message): void {
     expect(fn () => Question::score('health', $enum, 'How healthy?'))->toThrow(InvalidDecision::class, $message);

@@ -11,6 +11,7 @@ use EarthlingOllie\SystemOneClassification\Exceptions\InvalidDecision;
 use EarthlingOllie\SystemOneClassification\Exceptions\MalformedResponse;
 use EarthlingOllie\SystemOneClassification\Exceptions\RejectedByModel;
 use EarthlingOllie\SystemOneClassification\Exceptions\UnknownQuestion;
+use EarthlingOllie\SystemOneClassification\Model\JevProfile;
 use EarthlingOllie\SystemOneClassification\Protocol\SystemOneCodec;
 use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
 use EarthlingOllie\SystemOneClassification\Transport\Response;
@@ -40,6 +41,53 @@ it('encodes the context as the state and every question under its key', function
             'refund' => ['type' => 'noul', 'instructions' => 'Do they ask for a refund?'],
         ],
     ]);
+});
+
+it('sends the pinned model, and no model field when none is pinned', function (): void {
+    $pinned = (new SystemOneCodec)->encode(churnDecision()->withModel('english'));
+
+    expect($pinned)->toBe([
+        'state' => 'We will cancel.',
+        'model' => 'english',
+        'questions' => ['churn' => ['type' => 'noul', 'instructions' => 'Does the customer threaten to cancel?']],
+    ])->and((new SystemOneCodec)->encode(churnDecision()))->not->toHaveKey('model');
+});
+
+// JSON carries only UTF-8: such text would fail in the HTTP client's json_encode() instead.
+it('refuses context text that is not valid UTF-8', function (): void {
+    $decision = Decision::about(Context::text("Billed tw\xB1ce"))->ask(Question::yesNo('churn', 'Cancel?'));
+
+    expect(fn () => (new SystemOneCodec)->encode($decision))
+        ->toThrow(InvalidDecision::class, 'The context text is not valid UTF-8, which JSON requires.');
+});
+
+it('refuses a question whose text is not valid UTF-8, naming its key', function (): void {
+    $decision = Decision::about(Context::text('We will cancel.'))
+        ->ask(Question::yesNo('churn', 'Cancel?'), Question::yesNo('refund', "Refund\xFF?"));
+
+    expect(fn () => (new SystemOneCodec)->encode($decision))
+        ->toThrow(InvalidDecision::class, "The text of question 'refund' is not valid UTF-8, which JSON requires.");
+});
+
+// Review finding: the pinned model was the one part of the body left unchecked; a profile
+// built from config can accept a name that is not UTF-8.
+it('refuses a pinned model that is not valid UTF-8', function (): void {
+    $decision = churnDecision()->withModel("engl\xB1sh");
+
+    expect(fn () => (new SystemOneCodec(new JevProfile(["engl\xB1sh"])))->encode($decision))
+        ->toThrow(InvalidDecision::class, 'The pinned model is not valid UTF-8, which JSON requires.');
+});
+
+it('keeps the JSON error as the cause of a UTF-8 refusal', function (): void {
+    try {
+        (new SystemOneCodec)->encode(Decision::about(Context::text("\xB1"))->ask(Question::yesNo('churn', 'Cancel?')));
+    } catch (InvalidDecision $exception) {
+        expect($exception->getPrevious())->toBeInstanceOf(JsonException::class);
+
+        return;
+    }
+
+    test()->fail('No InvalidDecision was raised.');
 });
 
 it('refuses to encode a decision that asks nothing', function (): void {

@@ -7,17 +7,24 @@ namespace EarthlingOllie\SystemOneClassification\Laravel;
 use EarthlingOllie\SystemOneClassification\Client\DecisionClient;
 use EarthlingOllie\SystemOneClassification\Domain\Decision;
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidConfiguration;
+use EarthlingOllie\SystemOneClassification\Model\JevProfile;
+use EarthlingOllie\SystemOneClassification\Model\LayaProfile;
+use EarthlingOllie\SystemOneClassification\Model\ModelProfile;
 use EarthlingOllie\SystemOneClassification\Protocol\SystemOneCodec;
 use EarthlingOllie\SystemOneClassification\Result\Result;
 use EarthlingOllie\SystemOneClassification\Transport\HttpTransport;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Http\Client\Factory;
 
+use function array_is_list;
+use function explode;
+use function filter_var;
 use function implode;
-use function in_array;
 use function is_array;
 use function is_numeric;
+use function is_scalar;
 use function is_string;
+use function trim;
 
 /**
  * What the SystemOne facade resolves to: builds a DecisionClient per configured connection
@@ -27,7 +34,7 @@ use function is_string;
  */
 final readonly class SystemOneManager
 {
-    /** The model profiles a connection can name; #6 turns each into a ModelProfile. */
+    /** The model profiles a connection can name. */
     private const array PROFILES = ['laya', 'jev'];
 
     public function __construct(
@@ -52,7 +59,6 @@ final readonly class SystemOneManager
         $url = $connection['url'] ?? null;
         $apiKey = $connection['api_key'] ?? null;
         $timeout = $connection['timeout'] ?? '';
-        $profile = $connection['profile'] ?? '';
 
         if (! is_string($url) || $url === '') {
             throw InvalidConfiguration::missingUrl($name);
@@ -71,18 +77,9 @@ final readonly class SystemOneManager
             throw InvalidConfiguration::invalidTimeout($name);
         }
 
-        // Like the timeout, an unset or empty profile means the default: Laya.
-        if ($profile === '') {
-            $profile = 'laya';
-        }
-
-        if (! in_array($profile, self::PROFILES, true)) {
-            throw InvalidConfiguration::unknownProfile($name, implode(', ', self::PROFILES));
-        }
-
         return new DecisionClient(
             new HttpTransport($this->http, $url, $apiKey, (float) $timeout),
-            new SystemOneCodec($profile),
+            new SystemOneCodec(self::profile($name, $connection)),
         );
     }
 
@@ -90,6 +87,86 @@ final readonly class SystemOneManager
     public function decide(Decision $decision): Result
     {
         return $this->connection()->decide($decision);
+    }
+
+    /**
+     * The connection's model profile, from its `profile`, `tournament_grouping` and `models`.
+     *
+     * @param  array<mixed>  $connection
+     *
+     * @throws InvalidConfiguration
+     */
+    private static function profile(string $name, array $connection): ModelProfile
+    {
+        // Like the timeout, an unset or empty profile means the default: Laya.
+        $profile = $connection['profile'] ?? '';
+        $models = self::models($name, $connection['models'] ?? []);
+        // Checked whatever the profile, so a config does not break only when it switches to laya.
+        $tournamentGrouping = self::tournamentGrouping($name, $connection['tournament_grouping'] ?? false);
+
+        return match ($profile) {
+            '', 'laya' => new LayaProfile($tournamentGrouping, $models),
+            'jev' => new JevProfile($models),
+            default => throw InvalidConfiguration::unknownProfile($name, implode(', ', self::PROFILES)),
+        };
+    }
+
+    /**
+     * true or false, or an env() string such as '1', 'true', 'on', '0', 'false' or ''.
+     *
+     * @throws InvalidConfiguration
+     */
+    private static function tournamentGrouping(string $name, mixed $value): bool
+    {
+        // filter_var() passes true and false through and reads '1', 'true', 'on', '0', '' ...
+        $value = is_scalar($value) ? filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) : null;
+
+        return $value ?? throw InvalidConfiguration::invalidTournamentGrouping($name);
+    }
+
+    /**
+     * A list of model names, or a comma-separated string of them (SYSTEM_ONE_MODELS), each
+     * trimmed. Empty entries of the string are dropped, so '' means none (as an unset or null
+     * key does: the caller reads it with ?? []); an empty or non-string entry of the list is
+     * refused.
+     *
+     * @return list<string>
+     *
+     * @throws InvalidConfiguration
+     */
+    private static function models(string $name, mixed $models): array
+    {
+        if (is_string($models)) {
+            $names = [];
+
+            foreach (explode(',', $models) as $model) {
+                $model = trim($model);
+
+                if ($model !== '') {
+                    $names[] = $model;
+                }
+            }
+
+            return $names;
+        }
+
+        if (! is_array($models) || ! array_is_list($models)) {
+            throw InvalidConfiguration::invalidModels($name);
+        }
+
+        $names = [];
+
+        foreach ($models as $model) {
+            $model = is_string($model) ? trim($model) : '';
+
+            if ($model === '') {
+                throw InvalidConfiguration::invalidModels($name);
+            }
+
+            $names[] = $model;
+        }
+
+        return $names;
     }
 
     private function defaultConnection(): string
