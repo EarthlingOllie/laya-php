@@ -7,6 +7,7 @@ namespace EarthlingOllie\SystemOneClassification\Result\Answer;
 use BackedEnum;
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidDistribution;
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidProbability;
+use EarthlingOllie\SystemOneClassification\Result\Abstention;
 use EarthlingOllie\SystemOneClassification\Result\Confidence;
 use EarthlingOllie\SystemOneClassification\Result\Distribution;
 use EarthlingOllie\SystemOneClassification\Result\Probability;
@@ -26,6 +27,8 @@ use function is_int;
  */
 final readonly class ScoreAnswer implements Answer
 {
+    public bool $abstained;
+
     /** The expected level: the mean backing value, weighted by the distribution. */
     public float $expected;
 
@@ -34,7 +37,7 @@ final readonly class ScoreAnswer implements Answer
      * @param  Distribution<TEnum>  $distribution  over an int-backed enum; the probabilities are
      *                                             normalised, as the server rounds each one
      *
-     * @throws InvalidProbability when answerConfidence is outside [0, 1]
+     * @throws InvalidProbability when answerConfidence or the abstention threshold is outside [0, 1]
      * @throws InvalidDistribution when the value is not one of the distribution's cases, the
      *                             enum is not int-backed, no level has any probability, or
      *                             another level is more probable than the value
@@ -44,8 +47,16 @@ final readonly class ScoreAnswer implements Answer
         public float $answerConfidence,
         public Confidence $confidence,
         public Distribution $distribution,
+        public Abstention $abstention = Abstention::NotRequested,
+        public ?float $abstentionThreshold = null,
     ) {
         Probability::check('The answer confidence', $answerConfidence);
+
+        if ($abstentionThreshold !== null) {
+            Probability::check('The abstention threshold', $abstentionThreshold);
+        }
+
+        $this->abstained = $abstention === Abstention::Abstained;
         $probability = $distribution->probabilityOf($value);
 
         $this->expected = self::expected($value::class, $distribution);

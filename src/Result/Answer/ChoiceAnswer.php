@@ -7,6 +7,7 @@ namespace EarthlingOllie\SystemOneClassification\Result\Answer;
 use BackedEnum;
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidDistribution;
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidProbability;
+use EarthlingOllie\SystemOneClassification\Result\Abstention;
 use EarthlingOllie\SystemOneClassification\Result\Confidence;
 use EarthlingOllie\SystemOneClassification\Result\Distribution;
 use EarthlingOllie\SystemOneClassification\Result\Probability;
@@ -21,11 +22,13 @@ use EarthlingOllie\SystemOneClassification\Result\Probability;
  */
 final readonly class ChoiceAnswer implements Answer
 {
+    public bool $abstained;
+
     /**
      * @param  TEnum  $value
      * @param  Distribution<TEnum>  $distribution
      *
-     * @throws InvalidProbability when answerConfidence is outside [0, 1]
+     * @throws InvalidProbability when answerConfidence or the abstention threshold is outside [0, 1]
      * @throws InvalidDistribution when the value is not one of the distribution's cases
      */
     public function __construct(
@@ -33,8 +36,16 @@ final readonly class ChoiceAnswer implements Answer
         public float $answerConfidence,
         public Confidence $confidence,
         public Distribution $distribution,
+        public Abstention $abstention = Abstention::NotRequested,
+        public ?float $abstentionThreshold = null,
     ) {
         Probability::check('The answer confidence', $answerConfidence);
+
+        if ($abstentionThreshold !== null) {
+            Probability::check('The abstention threshold', $abstentionThreshold);
+        }
+
+        $this->abstained = $abstention === Abstention::Abstained;
         $distribution->probabilityOf($value);
     }
 

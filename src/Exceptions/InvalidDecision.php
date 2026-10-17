@@ -20,6 +20,37 @@ final class InvalidDecision extends InvalidArgumentException implements SystemOn
         return new self('The context text must not be empty.');
     }
 
+    public static function emptyFields(): self
+    {
+        return new self('The context fields must not be empty.');
+    }
+
+    public static function unnamedFields(): self
+    {
+        return new self('The context fields must be named: every top-level key must be a string that is not a whole number, so they are sent as a JSON object.');
+    }
+
+    public static function notPlainField(string $path, string $type): self
+    {
+        return new self("The context field '{$path}' holds a {$type}, which is not plain JSON data; pass arrays and scalars only.");
+    }
+
+    public static function nonFiniteField(string $path, float $value): self
+    {
+        return new self("The context field '{$path}' holds a float that is not finite ({$value}), which JSON cannot represent.");
+    }
+
+    public static function unserialisableFields(JsonException $reason): self
+    {
+        return new self('The context fields are not JSON-serialisable: '.$reason->getMessage().'.', previous: $reason);
+    }
+
+    /** Worded like json_encode's own depth error, which a field this deep would otherwise raise. */
+    public static function tooDeepField(string $field, int $limit): self
+    {
+        return new self("The context fields are not JSON-serialisable: Maximum stack depth exceeded in the field '{$field}', which nests arrays deeper than the {$limit} levels JSON allows.");
+    }
+
     public static function emptyKey(): self
     {
         return new self('A question key must not be empty.');
@@ -144,8 +175,38 @@ final class InvalidDecision extends InvalidArgumentException implements SystemOn
         return new self("{$part} is not valid UTF-8, which JSON requires.", previous: $previous);
     }
 
+    public static function noContexts(): self
+    {
+        return new self('decideMany() needs at least one context.');
+    }
+
+    public static function contextsNotList(): self
+    {
+        return new self('decideMany() takes the contexts as a list (keys 0, 1, 2, ...), so each result can be read back at its position.');
+    }
+
+    public static function notAContext(int $position, mixed $value): self
+    {
+        return new self("Context {$position} of the batch is ".get_debug_type($value).', not a Context; build it with Context::text().');
+    }
+
     public static function unsupportedQuestion(object $question): self
     {
         return new self('The wire format has no question type for '.get_debug_type($question).'.');
+    }
+
+    public static function minConfidenceOutOfRange(float $minConfidence): self
+    {
+        return new self("The minimum confidence must be between 0 and 1, got {$minConfidence}.");
+    }
+
+    public static function emptyLanguage(string $name): self
+    {
+        return new self("{$name} must not be empty.");
+    }
+
+    public static function nonPositiveLength(string $name, int $tokens): self
+    {
+        return new self("{$name} must be a positive number of tokens, got {$tokens}.");
     }
 }

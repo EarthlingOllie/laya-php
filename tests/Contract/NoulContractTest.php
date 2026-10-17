@@ -77,6 +77,35 @@ it('raises RejectedByModel with the server detail for each recorded 4xx', functi
     ['unknown_model', 422],
 ]);
 
+it('encodes structured fields as the recorded structured state', function (): void {
+    $recorded = LayaFixtures::requestBody('multiple_questions');
+    assert(is_array($recorded['state']) && is_array($recorded['questions']));
+    $decision = Decision::about(Context::fields($recorded['state']))
+        ->ask(Question::yesNo('churn', 'Does the customer threaten to cancel or leave?'));
+
+    $body = (new SystemOneCodec)->encode($decision);
+
+    expect($recorded['state'])->toBe(['subject' => 'Charged twice', 'body' => 'Hi, we were billed twice for March. Please refund the duplicate charge today or we will cancel our plan.'])
+        ->and(json_encode($body['state'], JSON_THROW_ON_ERROR))->toBe(json_encode($recorded['state'], JSON_THROW_ON_ERROR))
+        ->and($body['questions'])->toBe(['churn' => $recorded['questions']['churn']]);
+});
+
+it('reads the recorded model, routing and usage into the result meta', function (): void {
+    [$decision] = recordedNoulDecision();
+    $recorded = LayaFixtures::responseBody('noul');
+    assert(is_array($recorded['routing']) && is_array($recorded['usage']));
+
+    $meta = (new SystemOneCodec)->decode($decision, LayaFixtures::response('noul'), 12.5)->meta;
+
+    expect($meta->model)->toBe($recorded['model'])
+        ->and($meta->checkpoint)->toBe($recorded['routing']['model'])
+        ->and($meta->checkpoint)->toBe('english')
+        ->and($meta->routingReason)->toBe($recorded['routing']['reason'])
+        ->and($meta->inputTokens)->toBe($recorded['usage']['input_tokens'])
+        ->and($meta->outputTokens)->toBe($recorded['usage']['output_tokens'])
+        ->and($meta->latencyMs)->toBe(12.5);
+});
+
 it('reads from fixtures marked as shape-only until real weights are recorded', function (): void {
     // A reminder that fails once LayaFixtures::DIRECTORY points at real fixtures:
     // delete this test then (see tests/Fixtures/laya/provisional/README.md).

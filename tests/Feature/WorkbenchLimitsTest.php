@@ -32,7 +32,7 @@ it('shows the InvalidDecision for a choice over more options than the laya profi
     Http::fake();
 
     $this->get('/limits')
-        ->assertStatus(500)
+        ->assertStatus(422)
         ->assertSee('data-error="InvalidDecision"', escape: false)
         ->assertSee('data-profile="laya"', escape: false)
         ->assertSee('data-tournament-grouping="no"', escape: false)
@@ -96,7 +96,7 @@ it('shows the InvalidDecision for a model the profile does not accept, sending n
     Http::fake();
 
     $this->get('/decide?model=someone/else')
-        ->assertStatus(500)
+        ->assertStatus(422)
         ->assertSee('data-error="InvalidDecision"', escape: false)
         ->assertSee("The decision pins model 'someone/else', which the laya profile does not accept");
 

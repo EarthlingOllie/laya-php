@@ -87,4 +87,23 @@ return [
             'retry_delay' => env('SYSTEM_ONE_JEV_RETRY_DELAY', 500),
         ],
     ],
+
+    // DecisionMade and DecisionFailed, for metrics and alerting. They never carry the API
+    // key, and carry the context only with include_context on: it may hold personal data.
+    'events' => [
+        'enabled' => env('SYSTEM_ONE_EVENTS', true),
+        'include_context' => env('SYSTEM_ONE_EVENTS_INCLUDE_CONTEXT', false),
+    ],
+
+    // Identical decisions answered from a Laravel cache store instead of the server. The key
+    // covers the context, the questions, the request controls, the connection, the model and
+    // the checkpoint revisions the server reports on /health, which is read before each
+    // cached decision. A failing store is reported and skipped; it never fails a decision.
+    'cache' => [
+        'enabled' => env('SYSTEM_ONE_CACHE', false),
+        // A store from config/cache.php; empty uses the default store.
+        'store' => env('SYSTEM_ONE_CACHE_STORE'),
+        // Seconds; empty means an hour.
+        'ttl' => env('SYSTEM_ONE_CACHE_TTL', 3600),
+    ],
 ];

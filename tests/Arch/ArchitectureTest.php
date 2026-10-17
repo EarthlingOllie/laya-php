@@ -21,9 +21,9 @@ const PACKAGE = 'EarthlingOllie\\SystemOneClassification';
 /*
  * Core namespaces whose classes must be `final readonly`. Interfaces and enums are
  * allowed; traits and any other kind of class are not. Transport is included, as issue
- * #1 asks: a FakeTransport there holds scripted answers immutably, and anything that
- * records the decisions sent belongs to the testing fake under src/Laravel, which PLAN.md
- * names as the only stateful part besides Laravel singletons.
+ * #1 asks: anything that records the decisions sent belongs to the testing fake under
+ * src/Laravel/Testing, which PLAN.md names as the only stateful part besides Laravel
+ * singletons (see the Laravel rules below).
  */
 const READONLY_CORE = [
     PACKAGE.'\\Domain',
@@ -58,6 +58,32 @@ foreach (READONLY_CORE as $namespace) {
         ->classes()
         ->toBeReadonly();
 }
+
+/*
+ * The Laravel layer holds the only stateful code (PLAN.md, Quality bar): the testing fake,
+ * which records the decisions sent to it. Everything else there is readonly too, except the
+ * classes that extend the framework's own (the service provider, the facade, #11's artisan
+ * commands and QuietHttpFactory, #9's event-free HTTP factory), which PHP
+ * does not allow to be readonly.
+ */
+const LARAVEL = PACKAGE.'\\Laravel';
+const TESTING = LARAVEL.'\\Testing';
+
+arch(LARAVEL.' classes are final')
+    ->expect(LARAVEL)
+    ->classes()
+    ->toBeFinal();
+
+arch(LARAVEL.' classes are readonly, but for the framework subclasses and the testing fake')
+    ->expect(LARAVEL)
+    ->classes()
+    ->toBeReadonly()
+    ->ignoring([LARAVEL.'\\SystemOneServiceProvider', LARAVEL.'\\Facades', LARAVEL.'\\QuietHttpFactory', LARAVEL.'\\Commands', TESTING.'\\SystemOneFake']);
+
+// Production code never reaches the fake: only SystemOne::fake() swaps it in.
+arch(TESTING.' is used only by the facade')
+    ->expect(TESTING)
+    ->toOnlyBeUsedIn([LARAVEL.'\\Facades', TESTING]);
 
 arch(EXCEPTIONS.' classes are final')
     ->expect(EXCEPTIONS)

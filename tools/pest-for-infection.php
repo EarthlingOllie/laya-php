@@ -7,18 +7,23 @@ declare(strict_types=1);
  * Runs Pest on behalf of Infection's PHPUnit adapter (see infection.json5).
  *
  * Infection no longer ships a Pest adapter, and Pest's CLI is PHPUnit-compatible, so the
- * PHPUnit adapter can drive Pest, except for two details that this script bridges:
+ * PHPUnit adapter can drive Pest, except for three details that this script bridges:
  *
  * 1. Infection decides whether a mutant was killed from PHPUnit's summary line
  *    ("OK (...)" vs "FAILURES!"), which Pest does not print. After Pest exits, the
- *    matching PHPUnit summary is printed, derived only from Pest's exit code.
+ *    matching PHPUnit summary is printed, derived from Pest's exit code and item 3.
  * 2. Infection matches the tests in the coverage report (named `P\Tests\...` by Pest)
  *    against the JUnit report, where Pest writes `class="Tests\..."` and
  *    `file="tests/...Test.php::it does something"`. Those two attributes are rewritten
  *    to what PHPUnit itself would write (the generated class name and the absolute
  *    test file path).
+ * 3. Pest exits 0 when a test is risky (performs no assertions, say) even with
+ *    failOnRisky="true" (phpunit.xml.dist) or --fail-on-risky: its Result::exitCode()
+ *    returns early for a run without failures. A mutant that removes a test's only
+ *    assertion would then read as "OK" and escape. So Pest also writes PHPUnit's event
+ *    log, and a run with a "Test Considered Risky" event fails (exit 1, "FAILURES!").
  *
- * Pest's exit code is passed through unchanged.
+ * Otherwise Pest's exit code is passed through unchanged.
  */
 
 /**
@@ -34,10 +39,21 @@ function runPestForInfection(array $arguments, string $root): int
         return $process === false ? 2 : proc_close($process);
     }
 
-    $process = proc_open([PHP_BINARY, $root.'/vendor/bin/pest', ...$arguments], [STDIN, STDOUT, STDERR], $pipes);
+    $events = (string) tempnam(sys_get_temp_dir(), 'pest-events');
+    $process = proc_open([PHP_BINARY, $root.'/vendor/bin/pest', ...$arguments, '--log-events-text='.$events], [STDIN, STDOUT, STDERR], $pipes);
     $exitCode = $process === false ? 2 : proc_close($process);
+    $risky = riskyTests($events);
+    if (is_file($events)) {
+        unlink($events);
+    }
 
-    echo $exitCode === 0 ? "\nOK (Pest exited with 0)\n" : "\nFAILURES! (Pest exited with {$exitCode})\n";
+    if ($exitCode === 0 && $risky !== []) {
+        $exitCode = 1;
+        $count = count($risky) === 1 ? '1 test was' : count($risky).' tests were';
+        echo "\nFAILURES! (Pest exited with 0, but {$count} risky: ".implode(', ', $risky).")\n";
+    } else {
+        echo $exitCode === 0 ? "\nOK (Pest exited with 0)\n" : "\nFAILURES! (Pest exited with {$exitCode})\n";
+    }
 
     foreach ($arguments as $argument) {
         if (str_starts_with($argument, '--log-junit=')) {
@@ -46,6 +62,19 @@ function runPestForInfection(array $arguments, string $root): int
     }
 
     return $exitCode;
+}
+
+/**
+ * The tests PHPUnit's event log (--log-events-text) records as risky, by name.
+ *
+ * @return list<string>
+ */
+function riskyTests(string $events): array
+{
+    $log = is_file($events) ? (string) file_get_contents($events) : '';
+    preg_match_all('/Test Considered Risky \((.+?)\)$/m', $log, $matches);
+
+    return array_values(array_unique($matches[1]));
 }
 
 function normaliseJunit(string $path, string $root): void

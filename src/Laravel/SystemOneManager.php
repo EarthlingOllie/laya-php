@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace EarthlingOllie\SystemOneClassification\Laravel;
 
 use EarthlingOllie\SystemOneClassification\Client\DecisionClient;
+use EarthlingOllie\SystemOneClassification\Domain\Context;
 use EarthlingOllie\SystemOneClassification\Domain\Decision;
 use EarthlingOllie\SystemOneClassification\Exceptions\InvalidConfiguration;
 use EarthlingOllie\SystemOneClassification\Model\JevProfile;
@@ -12,9 +13,14 @@ use EarthlingOllie\SystemOneClassification\Model\LayaProfile;
 use EarthlingOllie\SystemOneClassification\Model\ModelProfile;
 use EarthlingOllie\SystemOneClassification\Protocol\SystemOneCodec;
 use EarthlingOllie\SystemOneClassification\Result\Result;
+use EarthlingOllie\SystemOneClassification\Result\ResultSet;
 use EarthlingOllie\SystemOneClassification\Transport\HttpTransport;
+use EarthlingOllie\SystemOneClassification\Transport\Redactor;
 use EarthlingOllie\SystemOneClassification\Transport\RetryPolicy;
+use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Config\Repository;
+use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Http\Client\Factory;
 
 use function array_is_list;
@@ -34,11 +40,12 @@ use function trim;
 
 /**
  * What the SystemOne facade resolves to: builds a DecisionClient per configured connection
- * (config/system-one.php) and sends decisions to the default one.
+ * (config/system-one.php), with the events and result cache the config turns on, and sends
+ * decisions to the default one.
  *
  * Config is read on every call, so runtime config() changes apply.
  */
-final readonly class SystemOneManager
+final readonly class SystemOneManager implements ConnectionResolver
 {
     /** The model profiles a connection can name. */
     private const array PROFILES = ['laya', 'jev'];
@@ -49,9 +56,15 @@ final readonly class SystemOneManager
     /** Milliseconds before the first retry when a connection sets `retries` but no `retry_delay`. */
     private const int DEFAULT_RETRY_DELAY = 200;
 
+    /** Seconds a cached result is kept when `system-one.cache.ttl` is empty. */
+    private const int DEFAULT_TTL = 3600;
+
     public function __construct(
         private Repository $config,
         private Factory $http,
+        private Dispatcher $events,
+        private CacheFactory $cache,
+        private ExceptionHandler $exceptions,
     ) {}
 
     /**
@@ -63,6 +76,7 @@ final readonly class SystemOneManager
     public function connection(?string $name = null): DecisionClient
     {
         $config = $this->configuration($name);
+        $settings = $this->settings();
 
         if ($config->remote && ! $config->hasApiKey()) {
             throw InvalidConfiguration::missingApiKey($config->name);
@@ -72,13 +86,16 @@ final readonly class SystemOneManager
             new HttpTransport(new QuietHttpFactory($this->http), $config->url, $config->apiKey(), $config->timeout, $config->retry, new LaravelSleeper),
             new SystemOneCodec($config->profile),
             model: $config->model,
+            cache: $settings['cache'] === null ? null : new StoreResponseCache($this->cache, $this->exceptions, $config->name, ...$settings['cache']),
+            observer: $settings['events'] ? new DispatchesDecisionEvents($this->events, $config->name, $config->model, $settings['includeContext']) : null,
         );
     }
 
     /**
      * A named connection's config, or the default one's, checked as connection() checks it
      * except for the API key a remote connection needs: what a stand-in for the host (the
-     * testing fake) checks, since it sends nothing.
+     * testing fake) checks, since it sends nothing. The package-wide event and cache settings
+     * every connection's client uses are checked too.
      *
      * @throws InvalidConfiguration when the connection is missing or malformed
      */
@@ -121,6 +138,7 @@ final readonly class SystemOneManager
         }
 
         $model = self::model($name, $connection['model'] ?? null);
+        $this->settings();
 
         return new ConnectionConfig(
             $name,
@@ -137,10 +155,102 @@ final readonly class SystemOneManager
         );
     }
 
+    /**
+     * The name of the connection used when none is given (`system-one.default`).
+     *
+     * @throws InvalidConfiguration when it is not set
+     */
+    public function defaultConnection(): string
+    {
+        $name = $this->config->get('system-one.default');
+
+        if (! is_string($name)) {
+            throw InvalidConfiguration::noDefaultConnection();
+        }
+
+        return $name;
+    }
+
+    /**
+     * A connection's URL fit to print (the artisan commands): its userinfo, query values and
+     * API key masked (Redactor), as /connections shows it.
+     *
+     * @throws InvalidConfiguration when the connection is missing or malformed
+     */
+    public function displayUrl(?string $name = null): string
+    {
+        $config = $this->configuration($name);
+
+        return Redactor::forConnection($config->url, $config->apiKey())->redact($config->url);
+    }
+
     /** Sends the decision to the default connection. */
     public function decide(Decision $decision): Result
     {
         return $this->connection()->decide($decision);
+    }
+
+    /**
+     * Asks the decision's questions about each context on the default connection (see
+     * DecisionClient::decideMany()).
+     *
+     * @param  list<Context>  $contexts
+     */
+    public function decideMany(array $contexts, Decision $decision): ResultSet
+    {
+        return $this->connection()->decideMany($contexts, $decision);
+    }
+
+    /**
+     * The package-wide `events` and `cache` settings, checked: whether to dispatch events and
+     * with the context, and the cache's store and TTL, or null when the cache is off.
+     *
+     * @return array{events: bool, includeContext: bool, cache: array{store: ?string, ttl: positive-int}|null}
+     *
+     * @throws InvalidConfiguration
+     */
+    private function settings(): array
+    {
+        $events = $this->setting('events.enabled', true);
+        $includeContext = $this->setting('events.include_context', false);
+
+        if (! $this->setting('cache.enabled', false)) {
+            return ['events' => $events, 'includeContext' => $includeContext, 'cache' => null];
+        }
+
+        $store = $this->config->get('system-one.cache.store');
+        $ttl = $this->config->get('system-one.cache.ttl');
+
+        if ($store !== null && ! is_string($store)) {
+            throw InvalidConfiguration::invalidCacheStore();
+        }
+
+        // An empty env value (`SYSTEM_ONE_CACHE_TTL=`) reaches here as '' or null: use the default.
+        $ttl = $ttl === null || $ttl === '' ? self::DEFAULT_TTL : filter_var($ttl, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+
+        if ($ttl === false) {
+            throw InvalidConfiguration::invalidCacheTtl();
+        }
+
+        return ['events' => $events, 'includeContext' => $includeContext, 'cache' => ['store' => $store === '' ? null : $store, 'ttl' => $ttl]];
+    }
+
+    /**
+     * A package-wide boolean setting (`events.*`, `cache.*`), read as flag() reads one.
+     * Missing, null or empty (`SYSTEM_ONE_EVENTS=`) means the default, as for every other
+     * setting.
+     *
+     * @throws InvalidConfiguration
+     */
+    private function setting(string $setting, bool $default): bool
+    {
+        $value = $this->config->get("system-one.{$setting}");
+
+        if ($value === null || $value === '') {
+            return $default;
+        }
+
+        return self::flag($value) ?? throw InvalidConfiguration::notABoolean($setting);
     }
 
     /**
@@ -295,16 +405,5 @@ final readonly class SystemOneManager
         }
 
         return $names;
-    }
-
-    private function defaultConnection(): string
-    {
-        $name = $this->config->get('system-one.default');
-
-        if (! is_string($name)) {
-            throw InvalidConfiguration::noDefaultConnection();
-        }
-
-        return $name;
     }
 }

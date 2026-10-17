@@ -246,8 +246,9 @@ against a hand-written stand-in, `tests/Fixtures/jev/provisional/openapi.json`
    models, change the profile and the model name in config.
 2. **Host** → a named `Connection` in config, set up the way Laravel database
    connections are (`local`, `laya-hosted`, `jev`). Every connection uses the
-   same `HttpTransport`. The `Transport` interface exists only so the testing
-   fake can replace HTTP. AWS is out of scope (decision 2).
+   same `HttpTransport`. The `Transport` interface exists only so tests can
+   replace HTTP (the client's own; an app's tests replace the whole client with
+   `SystemOne::fake()`, #10). AWS is out of scope (decision 2).
 
 ### Proposed public API
 
@@ -487,16 +488,151 @@ How the typing works:
 - A singleton is bound in the container and exposed through a `SystemOne`
   facade.
 - `SystemOne::fake([...])` returns scripted answers and lets tests assert on the
-  decisions that were sent.
+  decisions that were sent. Built in #10:
+  - `SystemOne::fake([FakeAnswer::…])` swaps `Laravel\Testing\SystemOneFake` in behind
+    the facade, whose accessor is the new `Laravel\ConnectionResolver` interface (aliased
+    to the manager's singleton). Inject `ConnectionResolver` to stay fakeable: the final
+    `SystemOneManager` itself stays the real manager under the fake (it could not be
+    swapped for a fake without a `TypeError`).
+    `SystemOne::connection()` returns a `Client\Decider` (the interface `DecisionClient`
+    implements); under the fake it is a `Laravel\Testing\FakeConnection`.
+  - Typed helpers, generic over the question's enum: `FakeAnswer::yesNo($q, 0.91)`,
+    `FakeAnswer::choice($q, Case, confidence: 0.9)` (default 1; the rest is shared evenly
+    among the other options, so below 1/n is an `InvalidFakeAnswer`) and
+    `FakeAnswer::score($q, Case, expected: 1.7)` (default: the case's value; the case
+    blended with the fewest levels that move the mean there, so the case stays the most
+    likely level, ties going to the lowest as in the codec; an expected level it cannot
+    reach that way is an `InvalidFakeAnswer`). They
+    build the real `YesNoAnswer`/`ChoiceAnswer`/`ScoreAnswer`; the raw `confidence` is
+    Laya's formula (1 − normalised entropy) tagged with the connection's `profile`.
+  - Scripts match by `Domain\Question\HandleIdentity`, the identity `Result::get()` now
+    reads by too; the last script for a question wins. With no script a question gets
+    `FakeAnswer::unscripted()` (yes/no 0.0, the first option, the lowest level, all
+    certain), or after `->strict()` an `UnscriptedQuestion` naming any same-key script and
+    what differs.
+  - The fake encodes each decision with `SystemOneCodec` first, so it refuses (and does
+    not record) what the real client refuses, with the connection's `ModelProfile` (so
+    its limits apply too); and it has the real manager check each connection with
+    `configuration()`, so a connection config the real client refuses is refused under
+    the fake too, except a remote host's missing API key: nothing is sent, so faking
+    `jev` needs no real key (integration branch).
+  - `assertDecided(fn (Decision, string $connection): bool)`, `assertDecidedTimes(n)`,
+    `assertNothingDecided()` and `assertAsked($question)` (some result reads that handle).
+    They use PHPUnit's `Assert`, which an app's test suite always has.
+  - **Still to wire in the stack** (built on #5's branch, without #6, #7, #8 or #9):
+    - #8 `decideMany()` (done on the integration branch): on `Client\Decider` (so
+      `ConnectionResolver` too), `SystemOneFake` and `FakeConnection`. The batch is first
+      encoded with `encodeBatches()`, so the fake refuses what the real client refuses
+      before recording anything; then each context is answered and recorded as one
+      decision (`withContext()`), so the assertions cover batches unchanged. The
+      `ResultSet`'s usage is null.
+    - #7 abstention (done on the integration branch): `FakeAnswer::abstained($script)`
+      keeps the script's value and reads as `Abstained` at the decision's
+      `min_confidence`. Every other answer on a gated decision is gated as laya-serve
+      gates it, on `answer_confidence` (for yes/no, the probability of the side
+      reported): `Abstained` below the threshold, `Passed` otherwise; on an ungated
+      decision it reads as `NotRequested`. An abstained script asked for by a
+      decision with no `min_confidence` is an `InvalidFakeAnswer`: no server would
+      abstain on it.
+    - #6 `ModelProfile` (done on the integration branch): `FakeConnection::$profile` is
+      the connection's `ModelProfile`; answers are tagged with its `name`.
+    - #9 named connections (done on the integration branch): the fake checks connections
+      with `configuration()`, so the remote-host key rule does not apply under it.
 - Events: `DecisionMade` and `DecisionFailed`. Logging the context text is off
   by default, because it may contain PII.
 - Optional result caching through Laravel's cache, keyed on the decision, the
   model and the checkpoint revision.
-- Artisan commands:
-  - `system-one:install` publishes the config and Compose files.
-  - `system-one:health` checks the server's health and which checkpoints are
-    loaded.
-  - `system-one:try` runs a question set against some text from the CLI.
+- **Built in #12.** The core client has two framework-free seams,
+  `Client\DecisionObserver` and `Client\ResponseCache`; the Laravel layer
+  implements them (`Laravel\DispatchesDecisionEvents`,
+  `Laravel\StoreResponseCache`), and `SystemOneManager` wires them per
+  connection from `system-one.events` and `system-one.cache`.
+  - `Laravel\Events\DecisionMade` carries the connection, the model asked (the
+    decision's pinned one, else the connection's `model`), the question keys, the `Result`, its `Meta`, the latency and
+    `cached`; `DecisionFailed` the connection, model, question keys and the
+    `SystemOneException` (for decisions refused before sending too). Neither
+    holds the API key, and the context (text or fields) only with
+    `events.include_context` (`SYSTEM_ONE_EVENTS_INCLUDE_CONTEXT`). Events are
+    on by default (`SYSTEM_ONE_EVENTS`). An exception's trace can still hold
+    the context as an argument where `zend.exception_ignore_args` is off (it is
+    on in php.ini-production); that is PHP's, not the event's.
+  - Caching is off by default (`SYSTEM_ONE_CACHE`), uses `cache.store`
+    (`SYSTEM_ONE_CACHE_STORE`, empty for the default store) and `cache.ttl`
+    (`SYSTEM_ONE_CACHE_TTL`, seconds, an hour when empty). With it on, every
+    decision first reads `GET /health`, and the key is a SHA-256 of the
+    checkpoint revisions it reports and the whole encoded request body (context,
+    every question as sent, so a choice's options and descriptions too, the
+    request controls and the `model`), scoped to the connection name. A loaded
+    checkpoint with no revision (a local path) skips the cache, and an answer
+    is stored only when the checkpoint it reports (`routing.model`) is one the
+    key holds a revision for, so a checkpoint loaded lazily by that very call,
+    or a host that reports no routing, is never cached. A checkpoint swapped
+    between the /health read and the decision (a restart in between) can
+    still be stored under the old revision; the TTL bounds that. Entries are
+    `{status, body}` arrays, so stores that refuse to unserialize objects work;
+    a hit is decoded again, with no latency. A store that throws, a /health
+    that is refused or unreadable, and an entry that does not decode are
+    reported through the exception handler and skipped. On the integration
+    branch the /health read is a probe sent once (`Transport::get()`), and one
+    that cannot reach the server is skipped and reported too: the decision then
+    goes out with the connection's retries (#9), which decide whether the host
+    is really down, instead of the probe spending that budget first.
+  - Trade-offs kept on purpose: the /health read costs one cheap GET per
+    cached decision, hits included, so a revision change is never missed (a
+    memo of the revisions would serve stale answers for its lifetime); a
+    /health that keeps failing is reported on every decision, as a store that
+    keeps failing is, so the operator sees that caching does nothing. A
+    listener that throws propagates, as Laravel's synchronous listeners do;
+    queue the listener to isolate it. #9 should decide how hosts without
+    /health (Jev) cache, if at all.
+  - Each connection may set `model` (`SYSTEM_ONE_MODEL`); on the integration
+    branch this is #9's key: sent when a decision pins none, a pin
+    (`withModel()`, #6) wins, and it is held to the profile.
+  - Batches (integration branch): `decideMany()` treats each context as one
+    decision, as the fake does. Each result's meta carries the latency of the
+    request that carried its state, so a null latency still means "from the
+    cache". The observer gets a `DecisionMade` per context
+    (its own context, result and `cached`), or, when the batch fails, a
+    `DecisionFailed` per context with the batch's exception (one, for the
+    decision itself, when the batch is refused before it has contexts). With the
+    cache on, /health is read once per batch and each context is keyed exactly as
+    `decide()` keys it (a batch body is `decide()`'s with `state` swapped for
+    `states`), so the two share entries; only misses are sent, as batches, and
+    each result is stored as the single-call body `decide()` would have got
+    (`SystemOneCodec::batchEntries()`), as soon as its request answers, so a
+    later request that fails does not lose the answers already paid for. The
+    call itself fails then, so every context gets a `DecisionFailed`: the caller
+    gets no results. The set's `usage` counts the requests sent, so a batch
+    answered from the cache alone reports zero tokens.
+  - The miss tests cover each part of the key the codec sends, a choice's
+    options and their descriptions (#4) and a pinned model (#6) included.
+- Artisan commands. Built in #11 (`src/Laravel/Commands/`), each with exit
+  codes 0 (done), 1 (the server or a file it must edit let it down) and 2
+  (input or config it cannot use, before anything is sent or written):
+  - `system-one:install [--mode=standalone|sail]` copies config/system-one.php,
+    then sets up the server (see "Docker" below). It only ever adds: an
+    existing file, service, volume or `.env` key is left as it is, so a second
+    run changes nothing. Without `--mode` it asks, defaulting to standalone;
+    `--no-interaction` takes the default.
+  - `system-one:health [--connection=]` reads `GET /health` through
+    `DecisionClient::health()` (a `Result\Health`: status, loaded checkpoints
+    or null when the server lists none to a keyless request, revisions,
+    device) and prints it with the URL redacted. 1 when unreachable, a 4xx/5xx,
+    an unexpected body or any status but `ok`; 2 for an unknown connection.
+  - `system-one:try [text] [--file=] [--yes-no=...] [--choice=...] [--score=...]
+    [--connection=] [--json]` asks each question about the argument, the file or
+    stdin (refused with 2 when stdin is a terminal, rather than waiting on it),
+    and prints value, confidence (the reported value's probability) and
+    distribution per answer. Its errors go to stderr, so stdout stays valid JSON
+    under `--json`. On the integration branch: `--choice` and `--score` (#4, #5)
+    name a backed enum of the app before the instructions
+    (`--choice="App\Enums\Department:Which department?"`), as choice and score
+    questions are built in code; keys run q1, q2, ... over the yes/no questions,
+    then the choices, then the scores. A score also prints its expected level.
+    It prints how the server routed the decision (#7's `Meta`: model, checkpoint,
+    reason, input tokens), and `--json` adds a `routing` object.
+- `Transport::get()` sits next to `post()` for the health probe; every
+  transport implements both.
 
 ### Docker (part of the package)
 
@@ -533,12 +669,26 @@ bin/
   the proxy's CA (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`) and, if the proxy
   blocks the Xet hosts (`cas-server.xethub.hf.co`), `HF_HUB_DISABLE_XET=1`, set
   through a `LAYA_COMPOSE_OVERRIDE` file.
-- `system-one:install` asks which to set up:
-  - **Standalone** (the default): publishes `compose.system-one.yaml` into the
-    app and sets `SYSTEM_ONE_URL=http://localhost:8000` in `.env`.
-  - **Sail**: adds a `laya` service to the app's Sail `docker-compose.yml` and
-    sets `SYSTEM_ONE_URL=http://laya:8000`, so it is reachable from the
-    `laravel.test` container.
+- `system-one:install` asks which to set up. Both files are built from
+  `docker/compose.yaml` at install time (`Laravel\Install\ComposeFiles`), so
+  they cannot drift from it; the build context points at the installed
+  package's `docker/laya` (`./vendor/...` when the package is inside the app).
+  - **Standalone** (the default): writes `compose.system-one.yaml` into the
+    app (the package file without its repo-only header) and sets
+    `SYSTEM_ONE_URL=http://localhost:8000` in `.env`.
+  - **Sail**: adds a `laya` service (on the `sail` network when the file has
+    one) and a `sail-laya` model-cache volume to the app's Sail Compose file
+    (`compose.yaml`, `compose.yml`, `docker-compose.yaml` or
+    `docker-compose.yml`, in Compose's own order) as new lines only, so the
+    existing services and their formatting are untouched, and sets
+    `SYSTEM_ONE_URL=http://laya:8000`, so it is reachable from the
+    `laravel.test` container. The new lines follow the file's own line endings
+    and each section's indentation, and Compose tags such as `!reset` are
+    accepted. A file it cannot edit safely (flow-style `services:`/`volumes:`,
+    not YAML) is refused with exit 1 and left as it is.
+  - The standalone file keeps the package's `name: system-one`, so every app
+    on a machine that uses it shares one server on port 8000 and one copy of
+    the weights (the file's header says so).
 - The repo also has its own dev Compose file, which runs a PHP container next to
   `laya` for integration tests. CI runs the same setup with the HF cache volume
   cached between runs: `.github/workflows/integration.yml` builds the image
@@ -555,9 +705,10 @@ src/
   Result/        Result, ResultSet, Answer/{Answer,Choice,Score,YesNoAnswer}, Distribution, Verdict, Meta
   Model/         ModelProfile, LayaProfile, JevProfile, ProfileLimits
   Protocol/      SystemOneCodec (request/response mapping)
-  Transport/     Transport, HttpTransport, Response, Redactor, FakeTransport
-  Client/        DecisionClient (one per connection)
-  Laravel/       SystemOneServiceProvider, SystemOneManager, Facades/SystemOne, Commands/*, Events/*, Testing/Fake
+  Transport/     Transport, HttpTransport, Response, Redactor
+  Client/        Decider (interface), DecisionClient (one per connection)
+  Laravel/       SystemOneServiceProvider, SystemOneManager, ConnectionResolver, Facades/SystemOne,
+                 Commands/*, Events/*, Testing/{SystemOneFake,FakeConnection,FakeAnswer}
   Exceptions/    SystemOneException marker and the typed errors above
 config/system-one.php
 docker/
@@ -583,7 +734,12 @@ tests/{Unit,Contract,Integration}
   result, model and protocol namespaces must be `final` and `readonly`, and
   the core namespaces must not import `Illuminate\*`.
 - The only stateful pieces are Laravel singletons and the testing fake, which
-  records the decisions sent to it. Both live under `src/Laravel/`.
+  records the decisions sent to it. Both live under `src/Laravel/`. Since #10 the
+  architecture tests check it: every `Laravel` class is final, and readonly except the
+  service provider and facade (PHP does not allow it for subclasses of the framework's
+  classes) and `Testing\SystemOneFake`; and `Laravel\Testing` is used only by the facade.
+  The fake answers decisions itself rather than through a fake `Transport`, so it needs
+  no wire encoding of answers and returns the scripted answer objects as they are.
 
 ### Testing
 
@@ -646,3 +802,47 @@ New questions get added here as they come up.
    `abstained` from `abstention === 'abstained'` (falling back to
    `low_confidence` when `abstention` is missing), and decide whether
    `unevaluated` needs its own representation or reads as "not abstained".
+
+   **Settled in #7.** Every answer (the `Answer` interface) has `abstained`,
+   `abstention` and `abstentionThreshold`. `abstained` is true only for
+   `Result\Abstention::Abstained`. `abstention` is that enum: `Passed`,
+   `Abstained`, `Unevaluated` (gate ran, no usable confidence) or
+   `NotRequested` (no `min_confidence`, so no gate ran). `abstention` decides,
+   and `low_confidence: true` without it reads as `Abstained`. The codec reads
+   all three fields in one helper (`decodeAbstention`), which each new answer
+   type's decoder spreads into its constructor.
+
+   An answer with neither `abstention` nor `low_confidence: true` reads as
+   `NotRequested` only when the decision set no `min_confidence`. When it did,
+   the answer reads as `Unevaluated`: a gate was asked for and the server gave
+   no verdict. It does not read as `Passed`, because a missing (or `false`)
+   `low_confidence` is not a pass. Laya also leaves the flag off answers it
+   could not evaluate, and its gate docs call reporting those as a pass "the
+   same lie as reporting it as a flag". Laya 0.4.8 always sends `abstention`
+   when `min_confidence` is set (live and in the fixtures), so this only
+   applies to a host that does not, such as Jev, whose spec is still unknown.
+
+2. **How strictly is response metadata read?** `usage` and `routing` are
+   informational, and hosts differ (Jev, and laya-serve under
+   `LAYA_JEV_STRICT=1`, send no `routing`), so a strict check could cost a
+   caller valid answers over a field it may never read.
+
+   **Settled in #7: strict, like the answers.** Each meta field is optional,
+   and keys the codec doesn't read are ignored, which already covers the
+   known differences between hosts. A field that is present but has the wrong
+   shape (`"routing": "english"`, a string token count) raises
+   `MalformedResponse` with the raw body. It is not mapped to null. `Meta`'s
+   null means "the host did not report this", and turning a broken report
+   into a null would make usage totals undercount without any sign. A root
+   field changing shape also means the protocol has drifted, so the answers
+   in the same body can't be trusted either. laya-serve 0.4.8 always sends
+   whole-number token counts (`int(...)` sums in `agent.py` and `serve.py`)
+   and a `routing` object (`dict(decision)` in `router.py`), so no recorded
+   host trips the check. A per-profile split (strict for Laya, tolerant for
+   others) was rejected because it means two behaviours to keep and test, for
+   a host whose spec isn't known yet.
+
+   One exception: a token count written as a whole number with a fraction or
+   exponent (`12.0`, `1e2`) is the same JSON number as `12` or `100`, so it
+   reads as that int. Fractional, negative, infinite and out-of-range values
+   are still refused.

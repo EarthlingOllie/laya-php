@@ -21,6 +21,18 @@
         // (see its constructor). PHPStan requires the call, so it stays.
         "MethodCallRemoval": {
             "ignore": ["EarthlingOllie\\SystemOneClassification\\Laravel\\QuietHttpFactory::__construct"]
+        },
+        // file_get_contents() and stream_get_contents() return false only when the read fails, after
+        // TryCommand::text() has checked the file or opened stdin. The casts turn that false into '',
+        // which Context::text() then refuses as empty text; no test can make an existing, readable
+        // file or an open stdin fail to read.
+        // Equivalent mutant: a GET is one attempt, and HostUnavailable names the attempts only
+        // above one, so 1 and 0 give the same exception.
+        "DecrementInteger": {
+            "ignore": ["EarthlingOllie\\SystemOneClassification\\Transport\\HttpTransport::get"]
+        },
+        "CastString": {
+            "ignore": ["EarthlingOllie\\SystemOneClassification\\Laravel\\Commands\\TryCommand::text"]
         }
     },
     // Run with --with-uncovered (see `composer mutate`) so that uncovered code counts

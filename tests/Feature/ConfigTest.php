@@ -73,6 +73,11 @@ const SYSTEM_ONE_ENVIRONMENT = [
     'SYSTEM_ONE_JEV_MODEL' => null,
     'SYSTEM_ONE_JEV_RETRIES' => null,
     'SYSTEM_ONE_JEV_RETRY_DELAY' => null,
+    'SYSTEM_ONE_EVENTS' => null,
+    'SYSTEM_ONE_EVENTS_INCLUDE_CONTEXT' => null,
+    'SYSTEM_ONE_CACHE' => null,
+    'SYSTEM_ONE_CACHE_STORE' => null,
+    'SYSTEM_ONE_CACHE_TTL' => null,
 ];
 
 it('ships local, laya-hosted and jev connections, with local the default, when nothing is set', function (): void {
@@ -114,7 +119,22 @@ it('ships local, laya-hosted and jev connections, with local the default, when n
                 'retry_delay' => 500,
             ],
         ],
+        'events' => ['enabled' => true, 'include_context' => false],
+        'cache' => ['enabled' => false, 'store' => null, 'ttl' => 3600],
     ]);
+});
+
+it('takes the event and cache settings from the environment', function (): void {
+    $config = systemOneConfigWith([
+        'SYSTEM_ONE_EVENTS' => 'false',
+        'SYSTEM_ONE_EVENTS_INCLUDE_CONTEXT' => 'true',
+        'SYSTEM_ONE_CACHE' => 'true',
+        'SYSTEM_ONE_CACHE_STORE' => 'redis',
+        'SYSTEM_ONE_CACHE_TTL' => '600',
+    ]);
+
+    expect($config['events'])->toBe(['enabled' => false, 'include_context' => true])
+        ->and($config['cache'])->toBe(['enabled' => true, 'store' => 'redis', 'ttl' => '600']);
 });
 
 it('takes the local base URL, key, timeout, model and retries from the environment', function (): void {

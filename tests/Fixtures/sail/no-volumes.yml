@@ -1,0 +1,9 @@
+# A Sail file trimmed by hand: two-space indentation and no volumes section.
+services:
+  laravel.test:
+    image: 'sail-8.4/app'
+    networks:
+      - sail
+networks:
+  sail:
+    driver: bridge

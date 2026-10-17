@@ -299,3 +299,91 @@ it('reads no Retry-After from a 5xx without one', function (): void {
 
     expect((new HttpTransport($http, 'http://laya.test'))->post('/v1/systemone', []))->toEqual(new Response(503, '{}'));
 });
+
+it('gets a path under the base URL with the API key and returns status and raw body', function (): void {
+    $http = new Factory;
+    $http->fake(['*' => Factory::response('{"status":"ok"}', 200)]);
+
+    $response = (new HttpTransport($http, 'http://laya.test:8000', 'secret-key'))->get('/health');
+
+    expect($response)->toEqual(new Response(200, '{"status":"ok"}'));
+    $http->assertSent(fn (Request $request): bool => $request->url() === 'http://laya.test:8000/health'
+        && $request->method() === 'GET'
+        && $request->hasHeader('Accept', 'application/json')
+        && $request->hasHeader('Authorization', 'Bearer secret-key'));
+});
+
+it('applies the timeout to a get and returns its error statuses as responses', function (): void {
+    $http = new Factory;
+    $options = null;
+    $http->fake(function (Request $request, array $sent) use (&$options) {
+        $options = $sent;
+
+        return Factory::response('{"detail":"Not Found"}', 404);
+    });
+
+    expect((new HttpTransport($http, 'http://laya.test', timeout: 4.0))->get('/health'))
+        ->toEqual(new Response(404, '{"detail":"Not Found"}'))
+        ->and($options)->toBeArray()->toHaveKey('timeout', 4.0);
+});
+
+it('keeps the URL credentials and API key out of HostUnavailable from a get', function (): void {
+    $http = new Factory;
+    $http->fake(['*' => Factory::failedConnection('cURL error 7: refused (key sk-bearer)')]);
+    $transport = new HttpTransport($http, 'http://ollie:s3cret-pass@laya.test', 'sk-bearer');
+
+    expect(fn () => $transport->get('/health'))
+        ->toThrow(HostUnavailable::class, 'The model server at http://***@laya.test could not be reached: cURL error 7: refused (key ***)');
+});
+
+// Review finding: a GET is a probe (/health for the cache and system-one:health), so it is sent
+// once: a deploy check fails fast, and a busy server is not probed through the whole backoff
+// before the decision's own retries.
+it('sends a get once, whatever the retry policy, with the bearer token', function (): void {
+    $http = new Factory;
+    $http->fake(['*' => $http->sequence()->push('{}', 503)->push('{"status":"ok"}', 200)]);
+    $sleeper = new RecordingSleeper;
+    $transport = new HttpTransport($http, 'http://laya.test', 'secret-key', retry: new RetryPolicy(2, 10), sleeper: $sleeper);
+
+    expect($transport->get('/health'))->toEqual(new Response(503, '{}'))
+        ->and($sleeper->waits())->toBe([]);
+    $http->assertSentCount(1);
+    $http->assertSent(fn (Request $request): bool => $request->header('Authorization') === ['Bearer secret-key']);
+
+    $http = new Factory;
+    $http->fake(['*' => $http->sequence()->pushFailedConnection('refused')->push('{}', 200)]);
+
+    expect(fn () => (new HttpTransport($http, 'http://laya.test', retry: new RetryPolicy(2, 10), sleeper: $sleeper))->get('/health'))
+        ->toThrow(HostUnavailable::class, 'The model server at http://laya.test could not be reached: refused');
+    $http->assertSentCount(1);
+});
+
+it('gets a path under a base URL that has a path of its own, with no body', function (): void {
+    $http = new Factory;
+    $http->fake(['*' => Factory::response('{"status":"ok"}', 200)]);
+
+    $response = (new HttpTransport($http, 'https://proxy.test/laya/', 'secret-key'))->get('/health');
+
+    expect($response)->toEqual(new Response(200, '{"status":"ok"}'));
+    $http->assertSent(fn (Request $request): bool => $request->url() === 'https://proxy.test/laya/health'
+        && $request->method() === 'GET'
+        && $request->body() === ''
+        && $request->hasHeader('Accept', 'application/json')
+        && $request->hasHeader('Authorization', 'Bearer secret-key'));
+});
+
+it('gets with the configured timeout and no Authorization header without a key', function (): void {
+    $http = new Factory;
+    $options = null;
+    $http->fake(function (Request $request, array $sent) use (&$options) {
+        $options = $sent;
+
+        return Factory::response('{}', 503);
+    });
+
+    $response = (new HttpTransport($http, 'http://laya.test', '', 4.5))->get('/health');
+
+    expect($response->status)->toBe(503)
+        ->and($options)->toBeArray()->toHaveKey('timeout', 4.5);
+    $http->assertSent(fn (Request $request): bool => ! $request->hasHeader('Authorization'));
+});

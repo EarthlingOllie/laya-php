@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 namespace EarthlingOllie\SystemOneClassification\Transport;
 
+use Closure;
 use EarthlingOllie\SystemOneClassification\Exceptions\HostUnavailable;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory;
+use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\Response as HttpResponse;
 use SensitiveParameter;
 use SensitiveParameterValue;
 
@@ -17,10 +20,13 @@ use function max;
 use function min;
 
 /**
- * POSTs JSON to one System One host (laya-serve, hosted Laya or Jev) with Laravel's HTTP client.
+ * Sends requests to one System One host (laya-serve, hosted Laya or Jev) with Laravel's HTTP
+ * client: decisions as a JSON POST, and GETs such as `/health`.
  *
- * When the host cannot be reached or answers with a 5xx, the request is sent again as the
- * RetryPolicy says, waiting its backoff delays in between; a 4xx is returned at once.
+ * When the host cannot be reached or answers with a 5xx, a POST is sent again as the
+ * RetryPolicy says, waiting its backoff delays in between; a 4xx is returned at once. A GET is
+ * a probe and is sent once: a deploy's health check fails fast, and the cache's /health read
+ * does not wait out a busy server before the decision's own retries.
  *
  * The API key goes out only as the bearer token. It is held as a SensitiveParameterValue, so
  * var_dump(), print_r(), var_export() and Laravel's dump() of the transport (or of the client
@@ -46,10 +52,36 @@ final readonly class HttpTransport implements Transport
 
     public function post(string $path, array $body): Response
     {
+        return $this->retrying(static fn (PendingRequest $request): HttpResponse => $request->asJson()->post($path, $body));
+    }
+
+    public function get(string $path): Response
+    {
+        $outcome = $this->send(static fn (PendingRequest $request): HttpResponse => $request->get($path), 1);
+
+        if ($outcome instanceof Response) {
+            return $outcome;
+        }
+
+        $redactor = $this->redactor();
+
+        throw HostUnavailable::unreachable($redactor->redact($this->baseUrl), $redactor->redact($outcome->getMessage()), 1);
+    }
+
+    /**
+     * Sends the request, again after each of the policy's delays while the host cannot be
+     * reached or answers with a 5xx.
+     *
+     * @param  Closure(PendingRequest): HttpResponse  $send
+     *
+     * @throws HostUnavailable when the last attempt could not reach the host
+     */
+    private function retrying(Closure $send): Response
+    {
         $delays = $this->retry->delays();
 
         foreach ($delays as $retry => $delay) {
-            $outcome = $this->send($path, $body, $retry + 1);
+            $outcome = $this->send($send, $retry + 1);
 
             if ($outcome instanceof Response && $outcome->status < 500) {
                 return $outcome;
@@ -66,7 +98,7 @@ final readonly class HttpTransport implements Transport
         }
 
         $attempts = count($delays) + 1;
-        $outcome = $this->send($path, $body, $attempts);
+        $outcome = $this->send($send, $attempts);
 
         if ($outcome instanceof Response) {
             return $outcome;
@@ -80,15 +112,14 @@ final readonly class HttpTransport implements Transport
     /**
      * One attempt: the response, whatever its status, or why nothing came back.
      *
-     * @param  array<string, mixed>  $body
+     * @param  Closure(PendingRequest): HttpResponse  $send
      * @param  int  $attempt  which attempt this is, the first being 1
      */
-    private function send(string $path, array $body, int $attempt): Response|ConnectionException
+    private function send(Closure $send, int $attempt): Response|ConnectionException
     {
         $request = $this->http->createPendingRequest()
             ->baseUrl($this->baseUrl)
             ->acceptJson()
-            ->asJson()
             ->timeout($this->timeout);
 
         $apiKey = $this->apiKey();
@@ -98,7 +129,7 @@ final readonly class HttpTransport implements Transport
         }
 
         try {
-            $response = $request->post($path, $body);
+            $response = $send($request);
         } catch (ConnectionException $exception) {
             return $exception;
         }

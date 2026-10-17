@@ -5,6 +5,7 @@ declare(strict_types=1);
 use EarthlingOllie\SystemOneClassification\Domain\Question;
 use EarthlingOllie\SystemOneClassification\Domain\Question\QuestionHandle;
 use EarthlingOllie\SystemOneClassification\Exceptions\UnknownQuestion;
+use EarthlingOllie\SystemOneClassification\Result\Abstention;
 use EarthlingOllie\SystemOneClassification\Result\Answer\Answer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\ChoiceAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
@@ -82,7 +83,14 @@ it('refuses a handle of another class even when its key and instructions match',
 });
 
 it('refuses a held answer of another type than its handle expects', function (): void {
-    $other = new class implements Answer {};
+    $other = new class implements Answer
+    {
+        public bool $abstained = false;
+
+        public Abstention $abstention = Abstention::NotRequested;
+
+        public ?float $abstentionThreshold = null;
+    };
     $handle = new class($other::class) implements QuestionHandle
     {
         public string $key = 'churn';

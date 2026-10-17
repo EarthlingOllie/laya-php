@@ -17,18 +17,23 @@ use EarthlingOllie\SystemOneClassification\Domain\Question\QuestionHandle;
 use EarthlingOllie\SystemOneClassification\Domain\Question\ScoreQuestion;
 use EarthlingOllie\SystemOneClassification\Domain\Question\YesNoQuestion;
 use EarthlingOllie\SystemOneClassification\Laravel\Facades\SystemOne;
+use EarthlingOllie\SystemOneClassification\Result\Abstention;
 use EarthlingOllie\SystemOneClassification\Result\Answer\Answer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\ChoiceAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\ScoreAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Answer\YesNoAnswer;
 use EarthlingOllie\SystemOneClassification\Result\Confidence;
 use EarthlingOllie\SystemOneClassification\Result\Distribution;
+use EarthlingOllie\SystemOneClassification\Result\Meta;
 use EarthlingOllie\SystemOneClassification\Result\Result;
+use EarthlingOllie\SystemOneClassification\Result\ResultSet;
+use EarthlingOllie\SystemOneClassification\Result\Usage;
 use EarthlingOllie\SystemOneClassification\Result\Verdict;
 use EarthlingOllie\SystemOneClassification\Tests\Fixtures\Enums\Department;
 use EarthlingOllie\SystemOneClassification\Tests\Fixtures\Enums\Priority;
 use EarthlingOllie\SystemOneClassification\Tests\Fixtures\Enums\Urgency;
 
+use function count;
 use function PHPStan\Testing\assertType;
 
 function yesNoAnswerTypes(Result $result): void
@@ -40,6 +45,20 @@ function yesNoAnswerTypes(Result $result): void
     assertType('float', $result->get($churn)->probability);
     assertType('bool', $result->get($churn)->isYes(threshold: 0.8));
     assertType(Verdict::class, $result->get($churn)->verdict(yes: 0.8, no: 0.2));
+    assertType('bool', $result->get($churn)->abstained);
+    assertType(Abstention::class, $result->get($churn)->abstention);
+    assertType('float|null', $result->get($churn)->abstentionThreshold);
+}
+
+function metaTypes(Result $result): void
+{
+    assertType(Meta::class, $result->meta);
+    assertType('string|null', $result->meta->model);
+    assertType('string|null', $result->meta->checkpoint);
+    assertType('string|null', $result->meta->routingReason);
+    assertType('int<0, max>|null', $result->meta->inputTokens);
+    assertType('int<0, max>|null', $result->meta->outputTokens);
+    assertType('float|null', $result->meta->latencyMs);
 }
 
 function choiceAnswerTypes(Result $result): void
@@ -95,6 +114,7 @@ function scoreAnswerTypes(Result $result): void
 function genericHandleTypes(Result $result, QuestionHandle $anyQuestion): void
 {
     assertType(Answer::class, $result->get($anyQuestion));
+    assertType('bool', $result->get($anyQuestion)->abstained);
 }
 
 function facadeTypes(): void
@@ -106,4 +126,24 @@ function facadeTypes(): void
     assertType(Result::class, SystemOne::decide($decision));
     assertType(YesNoAnswer::class, SystemOne::decide($decision)->get($churn));
     assertType(Result::class, SystemOne::connection('local')->decide($decision));
+}
+
+function resultSetTypes(): void
+{
+    $churn = Question::yesNo('churn', 'Does the customer threaten to cancel?');
+    $decision = Decision::about(Context::text('template'))->ask($churn);
+    $results = SystemOne::decideMany([Context::text('We were billed twice.')], $decision);
+
+    assertType(ResultSet::class, $results);
+    assertType(ResultSet::class, SystemOne::connection('local')->decideMany([Context::text('x')], $decision));
+    assertType(Result::class, $results[0]);
+    assertType(YesNoAnswer::class, $results[0]->get($churn));
+    assertType('int<0, max>', count($results));
+    assertType(Usage::class.'|null', $results->usage);
+    assertType('list<'.Result::class.'>', $results->all());
+
+    foreach ($results as $position => $result) {
+        assertType('int', $position);
+        assertType('float', $result->get($churn)->probability);
+    }
 }

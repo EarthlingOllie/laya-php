@@ -38,7 +38,7 @@ it('rejects empty instructions', function (string $instructions): void {
 })->with(['empty' => '', 'blank' => " \n"])->throws(InvalidDecision::class, "Question 'churn' needs instructions.");
 
 it('holds the context text as given', function (): void {
-    expect(Context::text('  We were billed twice.  ')->text)->toBe('  We were billed twice.  ');
+    expect(Context::text('  We were billed twice.  ')->state)->toBe('  We were billed twice.  ');
 });
 
 it('rejects empty or blank context text, which the server would answer with a meaningless 0.5', function (string $text): void {

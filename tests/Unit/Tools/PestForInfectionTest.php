@@ -103,3 +103,21 @@ it('leaves an unreadable JUnit report untouched', function (): void {
 
     unlink($path);
 });
+
+// Pest exits 0 when a test performs no assertions, even with failOnRisky="true" (its
+// Result::exitCode() returns early for a run without failures). Under Infection a mutant that
+// removes a test's only assertion would then be reported as "OK" and escape.
+it('fails a run in which a test performs no assertions, naming it', function (): void {
+    $process = bridge(dirname(__DIR__, 2).'/Fixtures/Pest/RiskyTest.php');
+
+    expect($process->getExitCode())->toBe(1)
+        ->and($process->getOutput())->toContain('FAILURES! (Pest exited with 0, but 1 test was risky: P\\Tests\\Fixtures\\Pest\\RiskyTest::__pest_evaluable_it_asserts_nothing')
+        ->not->toContain("\nOK (");
+});
+
+it('passes a run in which every test asserts something, an expected exception included', function (): void {
+    $process = bridge(dirname(__DIR__, 2).'/Fixtures/Pest/PassingTest.php');
+
+    expect($process->getExitCode())->toBe(0)
+        ->and($process->getOutput())->toContain("\nOK (Pest exited with 0)");
+});
