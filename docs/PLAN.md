@@ -243,8 +243,9 @@ recorded fixtures is still to do.
    models, change the profile and the model name in config.
 2. **Host** → a named `Connection` in config, set up the way Laravel database
    connections are (`local`, `laya-hosted`, `jev`). Every connection uses the
-   same `HttpTransport`. The `Transport` interface exists only so the testing
-   fake can replace HTTP. AWS is out of scope (decision 2).
+   same `HttpTransport`. The `Transport` interface exists only so tests can
+   replace HTTP (the client's own; an app's tests replace the whole client with
+   `SystemOne::fake()`, #10). AWS is out of scope (decision 2).
 
 ### Proposed public API
 
@@ -394,7 +395,52 @@ How the typing works:
 - A singleton is bound in the container and exposed through a `SystemOne`
   facade.
 - `SystemOne::fake([...])` returns scripted answers and lets tests assert on the
-  decisions that were sent.
+  decisions that were sent. Built in #10:
+  - `SystemOne::fake([FakeAnswer::…])` swaps `Laravel\Testing\SystemOneFake` in behind
+    the facade, whose accessor is the new `Laravel\ConnectionResolver` interface (aliased
+    to the manager's singleton). Inject `ConnectionResolver` to stay fakeable: the final
+    `SystemOneManager` itself stays the real manager under the fake (it could not be
+    swapped for a fake without a `TypeError`).
+    `SystemOne::connection()` returns a `Client\Decider` (the interface `DecisionClient`
+    implements); under the fake it is a `Laravel\Testing\FakeConnection`.
+  - Typed helpers, generic over the question's enum: `FakeAnswer::yesNo($q, 0.91)`,
+    `FakeAnswer::choice($q, Case, confidence: 0.9)` (default 1; the rest is shared evenly
+    among the other options, so below 1/n is an `InvalidFakeAnswer`) and
+    `FakeAnswer::score($q, Case, expected: 1.7)` (default: the case's value; the case
+    blended with the fewest levels that move the mean there, so the case stays the most
+    likely level, ties going to the lowest as in the codec; an expected level it cannot
+    reach that way is an `InvalidFakeAnswer`). They
+    build the real `YesNoAnswer`/`ChoiceAnswer`/`ScoreAnswer`; the raw `confidence` is
+    Laya's formula (1 − normalised entropy) tagged with the connection's `profile`.
+  - Scripts match by `Domain\Question\HandleIdentity`, the identity `Result::get()` now
+    reads by too; the last script for a question wins. With no script a question gets
+    `FakeAnswer::unscripted()` (yes/no 0.0, the first option, the lowest level, all
+    certain), or after `->strict()` an `UnscriptedQuestion` naming any same-key script and
+    what differs.
+  - The fake encodes each decision with `SystemOneCodec` first, so it refuses (and does
+    not record) what the real client refuses; and it has the real manager build each
+    connection's client (which connects to nothing), so a connection config the real
+    client refuses is refused under the fake too.
+  - `assertDecided(fn (Decision, string $connection): bool)`, `assertDecidedTimes(n)`,
+    `assertNothingDecided()` and `assertAsked($question)` (some result reads that handle).
+    They use PHPUnit's `Assert`, which an app's test suite always has.
+  - **Still to wire in the stack** (built on #5's branch, without #6, #7, #8 or #9):
+    - #8 `decideMany()`: add `decideMany(array $contexts, Decision $decision): ResultSet`
+      to `Client\Decider` (so `ConnectionResolver` gets it too), and to `SystemOneFake` and
+      `FakeConnection` as a loop of `SystemOneFake::answer($decision->withContext($c), …)`
+      collected into a `ResultSet` (its `usage` null), after encoding with
+      `encodeBatches()`. Each context is then one recorded decision, so the assertions
+      cover batches unchanged.
+    - #7 abstention: `FakeAnswer::abstained($q, …)`, the issue's "abstained answer",
+      needs answers to carry `Abstention`, which only #7 adds. Until then it is not built.
+    - #6 `ModelProfile`: `FakeConnection::$profile` and the fake's profile lookup become
+      the connection's `ModelProfile` (the raw confidence could then use its formula), and
+      the fake should check limits through the same codec call it already makes.
+    - #9 named connections: `connection()` already works under the fake for any
+      configured name. If #9 adds methods to the client, `Decider` and `FakeConnection`
+      need them. Since the fake checks connections through the manager, #9's "remote
+      connection with no key" error will apply under the fake too: decide then whether
+      tests should set a dummy key (faithful) or the fake should skip that check.
 - Events: `DecisionMade` and `DecisionFailed`. Logging the context text is off
   by default, because it may contain PII.
 - Optional result caching through Laravel's cache, keyed on the decision, the
@@ -462,9 +508,10 @@ src/
   Result/        Result, ResultSet, Answer/{Answer,Choice,Score,YesNoAnswer}, Distribution, Verdict, Meta
   Model/         ModelProfile, LayaProfile, JevProfile
   Protocol/      SystemOneCodec (request/response mapping)
-  Transport/     Transport, HttpTransport, Response, Redactor, FakeTransport
-  Client/        DecisionClient (one per connection)
-  Laravel/       SystemOneServiceProvider, SystemOneManager, Facades/SystemOne, Commands/*, Events/*, Testing/Fake
+  Transport/     Transport, HttpTransport, Response, Redactor
+  Client/        Decider (interface), DecisionClient (one per connection)
+  Laravel/       SystemOneServiceProvider, SystemOneManager, ConnectionResolver, Facades/SystemOne,
+                 Commands/*, Events/*, Testing/{SystemOneFake,FakeConnection,FakeAnswer}
   Exceptions/    SystemOneException marker and the typed errors above
 config/system-one.php
 docker/
@@ -490,7 +537,12 @@ tests/{Unit,Contract,Integration}
   result, model and protocol namespaces must be `final` and `readonly`, and
   the core namespaces must not import `Illuminate\*`.
 - The only stateful pieces are Laravel singletons and the testing fake, which
-  records the decisions sent to it. Both live under `src/Laravel/`.
+  records the decisions sent to it. Both live under `src/Laravel/`. Since #10 the
+  architecture tests check it: every `Laravel` class is final, and readonly except the
+  service provider and facade (PHP does not allow it for subclasses of the framework's
+  classes) and `Testing\SystemOneFake`; and `Laravel\Testing` is used only by the facade.
+  The fake answers decisions itself rather than through a fake `Transport`, so it needs
+  no wire encoding of answers and returns the scripted answer objects as they are.
 
 ### Testing
 

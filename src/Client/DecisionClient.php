@@ -14,7 +14,7 @@ use EarthlingOllie\SystemOneClassification\Result\Result;
 use EarthlingOllie\SystemOneClassification\Transport\Transport;
 
 /** Sends decisions to one host and returns typed results. One client per connection. */
-final readonly class DecisionClient
+final readonly class DecisionClient implements Decider
 {
     public function __construct(
         private Transport $transport,

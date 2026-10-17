@@ -6,9 +6,14 @@ namespace EarthlingOllie\SystemOneClassification\Exceptions;
 
 use InvalidArgumentException;
 
-/** config/system-one.php does not describe a usable connection. */
+/** config/system-one.php does not describe a usable connection, or there is none to read. */
 final class InvalidConfiguration extends InvalidArgumentException implements SystemOneException
 {
+    public static function noApplication(): self
+    {
+        return new self('SystemOne::fake() needs a Laravel application behind the facades, to read config/system-one.php from.');
+    }
+
     public static function noDefaultConnection(): self
     {
         return new self('config/system-one.php has no default connection name.');
